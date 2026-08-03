@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 
 	"doctor-service/dto"
 	"doctor-service/entities"
@@ -17,16 +18,22 @@ type QualificationService interface {
 }
 
 type DefaultQualificationService struct {
-	qualRepo repositories.QualificationRepository
+	doctorRepo repositories.DoctorRepository
+	qualRepo   repositories.QualificationRepository
 }
 
-func NewQualificationService(qualRepo repositories.QualificationRepository) QualificationService {
-	return &DefaultQualificationService{qualRepo: qualRepo}
+func NewQualificationService(doctorRepo repositories.DoctorRepository, qualRepo repositories.QualificationRepository) QualificationService {
+	return &DefaultQualificationService{doctorRepo: doctorRepo, qualRepo: qualRepo}
 }
 
 func (s *DefaultQualificationService) AddQualification(ctx context.Context, doctorID uuid.UUID, req dto.AddQualificationRequest) (*dto.QualificationResponse, error) {
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return nil, errors.New("doctor not found")
+	}
+
 	qual := &entities.DoctorQualification{
-		DoctorID:       doctorID,
+		DoctorID:       doc.ID,
 		Degree:         req.Degree,
 		Specialization: req.Specialization,
 		College:        req.College,
@@ -50,7 +57,12 @@ func (s *DefaultQualificationService) AddQualification(ctx context.Context, doct
 }
 
 func (s *DefaultQualificationService) GetQualifications(ctx context.Context, doctorID uuid.UUID) ([]dto.QualificationResponse, error) {
-	quals, err := s.qualRepo.FindByDoctorID(ctx, doctorID)
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return nil, errors.New("doctor not found")
+	}
+
+	quals, err := s.qualRepo.FindByDoctorID(ctx, doc.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -71,5 +83,9 @@ func (s *DefaultQualificationService) GetQualifications(ctx context.Context, doc
 }
 
 func (s *DefaultQualificationService) DeleteQualification(ctx context.Context, qualificationID, doctorID uuid.UUID) error {
-	return s.qualRepo.Delete(ctx, qualificationID, doctorID)
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return errors.New("doctor not found")
+	}
+	return s.qualRepo.Delete(ctx, qualificationID, doc.ID)
 }

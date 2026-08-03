@@ -94,7 +94,7 @@ func (s *DefaultSubmissionService) SubmitVerification(ctx context.Context, docto
 		switch d.DocumentType {
 		case entities.DocumentTypeRegistrationCertificate:
 			hasRegistrationCert = true
-		case entities.DocumentTypeMBBSCertificate, entities.DocumentTypeMDCertificate:
+		case entities.DocumentTypeMBBSCertificate, entities.DocumentTypeMDCertificate, entities.DocumentTypeMedicalDegreeCertificate:
 			hasDegreeCert = true
 		case entities.DocumentTypeAadhaar, entities.DocumentTypePAN, entities.DocumentTypePassport:
 			hasGovtID = true
@@ -105,7 +105,7 @@ func (s *DefaultSubmissionService) SubmitVerification(ctx context.Context, docto
 		missingChecklist = append(missingChecklist, "Medical Registration Certificate document is missing")
 	}
 	if !hasDegreeCert {
-		missingChecklist = append(missingChecklist, "MBBS/MD Degree Certificate document is missing")
+		missingChecklist = append(missingChecklist, "Medical Degree Certificate document is missing")
 	}
 	if !hasGovtID {
 		missingChecklist = append(missingChecklist, "Government Identity proof (Aadhaar, PAN, or Passport) is missing")

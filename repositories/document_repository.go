@@ -17,6 +17,7 @@ type DocumentRepository interface {
 	FindLatestByDoctorAndType(ctx context.Context, doctorID uuid.UUID, docType entities.DocumentType) (*entities.DoctorDocument, error)
 	FindByHash(ctx context.Context, doctorID uuid.UUID, fileHash string) (*entities.DoctorDocument, error)
 	MarkPreviousVersionsNotLatest(ctx context.Context, doctorID uuid.UUID, docType entities.DocumentType) error
+	Delete(ctx context.Context, documentID, doctorID uuid.UUID) error
 }
 
 type GormDocumentRepository struct {
@@ -67,3 +68,10 @@ func (r *GormDocumentRepository) MarkPreviousVersionsNotLatest(ctx context.Conte
 		Where("doctor_id = ? AND document_type = ? AND is_latest = true", doctorID, docType).
 		Update("is_latest", false).Error
 }
+
+func (r *GormDocumentRepository) Delete(ctx context.Context, documentID, doctorID uuid.UUID) error {
+	return r.db.WithContext(ctx).
+		Where("document_id = ? AND doctor_id = ?", documentID, doctorID).
+		Delete(&entities.DoctorDocument{}).Error
+}
+

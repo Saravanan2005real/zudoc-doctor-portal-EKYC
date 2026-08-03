@@ -16,6 +16,7 @@ import (
 type DocumentService interface {
 	UploadDocument(ctx context.Context, doctorPublicID uuid.UUID, docType entities.DocumentType, file storage.ReadSeekerCloser, filename string, size int64) (*dto.DocumentUploadResponse, error)
 	GetDoctorDocuments(ctx context.Context, doctorPublicID uuid.UUID) ([]dto.DocumentUploadResponse, error)
+	DeleteDocument(ctx context.Context, documentID, doctorPublicID uuid.UUID) error
 }
 
 type DefaultDocumentService struct {
@@ -155,3 +156,12 @@ func (s *DefaultDocumentService) GetDoctorDocuments(ctx context.Context, doctorP
 	}
 	return res, nil
 }
+
+func (s *DefaultDocumentService) DeleteDocument(ctx context.Context, documentID, doctorPublicID uuid.UUID) error {
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorPublicID)
+	if err != nil || doc == nil {
+		return errors.New("doctor account not found")
+	}
+	return s.docRepo.Delete(ctx, documentID, doc.ID)
+}
+

@@ -94,14 +94,93 @@ window.goToStep = function(stepNum) {
 };
 
 // -------------------------------------------------------------
-// STEP 1: Registration & OTP Verification
+// STEP 1: Registration, Login & OTP Verification
 // -------------------------------------------------------------
 function initStep1Auth() {
   const regForm = document.getElementById('form-register');
+  const loginForm = document.getElementById('form-login');
+  
   const subviewReg = document.getElementById('subview-register');
+  const subviewLogin = document.getElementById('subview-login');
   const subviewOTP = document.getElementById('subview-otp');
+  
+  const btnToggleSignup = document.getElementById('btn-toggle-signup');
+  const btnToggleLogin = document.getElementById('btn-toggle-login');
+  const leftPaneSignup = document.getElementById('left-pane-signup-content');
+  const leftPaneLogin = document.getElementById('left-pane-login-content');
+  const step1Title = document.getElementById('step-1-title');
+  const step1Subtitle = document.getElementById('step-1-subtitle');
+  
   const btnVerifyOTP = document.getElementById('btn-verify-otp');
 
+  // Password Visibility Toggle
+  document.querySelectorAll('.password-toggle').forEach(icon => {
+    icon.addEventListener('click', function() {
+      const input = this.previousElementSibling;
+      if (input.type === 'password') {
+        input.type = 'text';
+        this.innerText = '🙈';
+      } else {
+        input.type = 'password';
+        this.innerText = '👁️';
+      }
+    });
+  });
+
+  // Toggle to Signup View
+  btnToggleSignup.addEventListener('click', () => {
+    subviewLogin.classList.add('hidden');
+    subviewReg.classList.remove('hidden');
+    leftPaneSignup.classList.add('hidden');
+    leftPaneLogin.classList.remove('hidden');
+    step1Title.innerText = '🔑 Doctor Registration & Mobile Identity';
+    step1Subtitle.innerText = 'Create your doctor account and verify your mobile ownership via OTP.';
+  });
+
+  // Toggle to Login View
+  btnToggleLogin.addEventListener('click', () => {
+    subviewReg.classList.add('hidden');
+    subviewLogin.classList.remove('hidden');
+    leftPaneLogin.classList.add('hidden');
+    leftPaneSignup.classList.remove('hidden');
+    step1Title.innerText = '🔑 Doctor Login';
+    step1Subtitle.innerText = 'Welcome back! Login to continue your verification process.';
+  });
+
+  // Handle Login
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const identifier = document.getElementById('login-identifier').value;
+    const password = document.getElementById('login-password').value;
+
+    try {
+      const resp = await fetch(`${API_BASE}/api/v1/doctors/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password }),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Login failed');
+
+      state.jwtToken = data.access_token;
+      state.activeDoctor = data.doctor;
+      
+      // Assume mobile verified if they can login
+      state.checklist.mobileVerified = true;
+      updateWizardChecklistUI();
+
+      document.getElementById('session-text').innerText = `Doctor: ${state.activeDoctor.first_name} (${state.activeDoctor.public_id.substring(0, 8)}...)`;
+      document.getElementById('user-session-badge').querySelector('.status-indicator').className = 'status-indicator online';
+
+      alert('Login Successful! Resuming from Step 2 (Credentials)...');
+      goToStep(2);
+    } catch (err) {
+      alert(`Login Error: ${err.message}`);
+    }
+  });
+
+  // Handle Registration
   regForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fname = document.getElementById('reg-fname').value;
@@ -121,7 +200,7 @@ function initStep1Auth() {
       if (!resp.ok) throw new Error(data.error || 'Registration failed');
 
       state.activeDoctor = {
-        public_id: data.doctor_id,
+        public_id: data.public_id,
         mobile: mobile,
         email: email,
         first_name: fname,
@@ -130,6 +209,7 @@ function initStep1Auth() {
 
       document.getElementById('otp-mobile-display').innerText = mobile;
       subviewReg.classList.add('hidden');
+      document.getElementById('auth-left-pane').classList.add('hidden');
       subviewOTP.classList.remove('hidden');
 
       alert(`Registration Successful! OTP sent to ${mobile}. Click OK to verify.`);
@@ -138,6 +218,7 @@ function initStep1Auth() {
     }
   });
 
+  // Handle OTP Verification
   btnVerifyOTP.addEventListener('click', async () => {
     const otpCode = document.getElementById('otp-input').value;
     if (!otpCode || otpCode.length !== 6) {
@@ -150,8 +231,10 @@ function initStep1Auth() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          doctor_id: state.activeDoctor.public_id,
+          public_id: state.activeDoctor.public_id,
+          mobile: state.activeDoctor.mobile,
           otp: otpCode,
+          purpose: 'REGISTER'
         }),
       });
 
@@ -346,7 +429,7 @@ function initStep3Vault() {
       state.uploadedDocuments.push(data);
 
       if (docType === 'REGISTRATION_CERTIFICATE') state.checklist.regCertUploaded = true;
-      if (docType === 'MBBS_CERTIFICATE' || docType === 'MD_CERTIFICATE') state.checklist.degreeCertUploaded = true;
+      if (docType === 'MEDICAL_DEGREE_CERTIFICATE') state.checklist.degreeCertUploaded = true;
       if (['AADHAAR', 'PAN', 'PASSPORT'].includes(docType)) state.checklist.govtIdUploaded = true;
 
       updateWizardChecklistUI();
@@ -398,6 +481,7 @@ function renderVaultTable() {
         <th>Version</th>
         <th>SHA-256 Hash</th>
         <th>Status</th>
+        <th>Action</th>
       </tr>
     </thead>
     <tbody>`;
@@ -409,6 +493,11 @@ function renderVaultTable() {
       <td>v${doc.version}</td>
       <td><code>${doc.file_hash.substring(0, 10)}...</code></td>
       <td><span class="badge badge-success">Clean / Vaulted</span></td>
+      <td>
+        <button class="btn btn-outline btn-sm delete-doc-btn" onclick="deleteDocument('${doc.document_id}')" style="border: 1px solid #ef4444; color: #ef4444; padding: 0.25rem 0.5rem;" title="Delete Document">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+        </button>
+      </td>
     </tr>`;
   });
 
@@ -665,3 +754,45 @@ async function handleAdminAction(actionType) {
     alert(`Admin Action Error: ${err.message}`);
   }
 }
+
+window.deleteDocument = async function(docId) {
+  if (!confirm("Are you sure you want to delete this document?")) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/doctors/documents?document_id=${docId}`, {
+      method: "DELETE",
+      headers: {
+        "X-Doctor-Public-ID": state.activeDoctor.public_id,
+      },
+    });
+    
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || "Failed to delete document");
+    }
+    
+    // Find the document to know its type
+    const docToDelete = state.uploadedDocuments.find(d => d.document_id === docId);
+    if (!docToDelete) return;
+    
+    // Remove from state
+    state.uploadedDocuments = state.uploadedDocuments.filter(d => d.document_id !== docId);
+    
+    // Check if we need to uncheck checklist items
+    const hasRegCert = state.uploadedDocuments.some(d => d.document_type === 'REGISTRATION_CERTIFICATE');
+    const hasDegree = state.uploadedDocuments.some(d => d.document_type === 'MEDICAL_DEGREE_CERTIFICATE');
+    const hasGovtId = state.uploadedDocuments.some(d => ['AADHAAR', 'PAN', 'PASSPORT'].includes(d.document_type));
+    
+    state.checklist.regCertUploaded = hasRegCert;
+    state.checklist.degreeCertUploaded = hasDegree;
+    state.checklist.govtIdUploaded = hasGovtId;
+    
+    // Update UI
+    updateWizardChecklistUI();
+    renderVaultTable();
+    
+    alert("Document deleted successfully!");
+  } catch (err) {
+    alert(`Delete Error: ${err.message}`);
+  }
+};
+

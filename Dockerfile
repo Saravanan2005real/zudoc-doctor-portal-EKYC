@@ -22,6 +22,7 @@ WORKDIR /root/
 
 COPY --from=builder /app/doctor-service .
 COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/public ./public
 
 EXPOSE 8080
 

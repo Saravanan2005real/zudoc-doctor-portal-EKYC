@@ -69,6 +69,23 @@ func (c *DocumentController) HandleDocuments(w http.ResponseWriter, r *http.Requ
 		}
 		c.respondJSON(w, http.StatusOK, resp)
 
+	case http.MethodDelete:
+		docIDParam := r.URL.Query().Get("document_id")
+		if docIDParam == "" {
+			c.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Missing document_id parameter"})
+			return
+		}
+		documentUUID, err := uuid.Parse(docIDParam)
+		if err != nil {
+			c.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid document_id format"})
+			return
+		}
+		if err := c.docService.DeleteDocument(r.Context(), documentUUID, docUUID); err != nil {
+			c.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		c.respondJSON(w, http.StatusOK, map[string]string{"message": "Document deleted successfully"})
+
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}

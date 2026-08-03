@@ -34,7 +34,7 @@ func (r *GormOTPRepository) Create(ctx context.Context, otp *entities.OTPVerific
 func (r *GormOTPRepository) FindLatestActive(ctx context.Context, doctorID uuid.UUID, purpose entities.OTPPurpose) (*entities.OTPVerification, error) {
 	var otp entities.OTPVerification
 	err := r.db.WithContext(ctx).
-		Where("doctor_id = ? AND purpose = ? AND verified_at IS NULL", doctorID, purpose).
+		Where("doctor_id = ? AND purpose = ? AND is_verified = ?", doctorID, purpose, false).
 		Order("created_at DESC").
 		First(&otp).Error
 
@@ -52,17 +52,16 @@ func (r *GormOTPRepository) IncrementAttempt(ctx context.Context, otpID uuid.UUI
 }
 
 func (r *GormOTPRepository) MarkVerified(ctx context.Context, otpID uuid.UUID) error {
-	now := time.Now()
 	return r.db.WithContext(ctx).
 		Model(&entities.OTPVerification{}).
 		Where("id = ?", otpID).
-		Update("verified_at", &now).Error
+		Update("is_verified", true).Error
 }
 
 func (r *GormOTPRepository) InvalidatePreviousOTPs(ctx context.Context, doctorID uuid.UUID, purpose entities.OTPPurpose) error {
 	now := time.Now()
 	return r.db.WithContext(ctx).
 		Model(&entities.OTPVerification{}).
-		Where("doctor_id = ? AND purpose = ? AND verified_at IS NULL", doctorID, purpose).
+		Where("doctor_id = ? AND purpose = ? AND is_verified = ?", doctorID, purpose, false).
 		Update("expires_at", now).Error
 }

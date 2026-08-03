@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 
 	"doctor-service/dto"
 	"doctor-service/entities"
@@ -17,21 +18,27 @@ type ClinicService interface {
 }
 
 type DefaultClinicService struct {
+	doctorRepo repositories.DoctorRepository
 	clinicRepo repositories.ClinicRepository
 }
 
-func NewClinicService(clinicRepo repositories.ClinicRepository) ClinicService {
-	return &DefaultClinicService{clinicRepo: clinicRepo}
+func NewClinicService(doctorRepo repositories.DoctorRepository, clinicRepo repositories.ClinicRepository) ClinicService {
+	return &DefaultClinicService{doctorRepo: doctorRepo, clinicRepo: clinicRepo}
 }
 
 func (s *DefaultClinicService) AddClinic(ctx context.Context, doctorID uuid.UUID, req dto.AddClinicRequest) (*dto.ClinicResponse, error) {
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return nil, errors.New("doctor not found")
+	}
+
 	mode := entities.ConsultationMode(req.ConsultationMode)
 	if mode == "" {
 		mode = entities.ConsultationModeOffline
 	}
 
 	clinic := &entities.DoctorClinic{
-		DoctorID:         doctorID,
+		DoctorID:         doc.ID,
 		ClinicName:       req.ClinicName,
 		Address:          req.Address,
 		City:             req.City,
@@ -61,7 +68,12 @@ func (s *DefaultClinicService) AddClinic(ctx context.Context, doctorID uuid.UUID
 }
 
 func (s *DefaultClinicService) GetClinics(ctx context.Context, doctorID uuid.UUID) ([]dto.ClinicResponse, error) {
-	clinics, err := s.clinicRepo.FindByDoctorID(ctx, doctorID)
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return nil, errors.New("doctor not found")
+	}
+
+	clinics, err := s.clinicRepo.FindByDoctorID(ctx, doc.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -84,5 +96,9 @@ func (s *DefaultClinicService) GetClinics(ctx context.Context, doctorID uuid.UUI
 }
 
 func (s *DefaultClinicService) DeleteClinic(ctx context.Context, clinicID, doctorID uuid.UUID) error {
-	return s.clinicRepo.Delete(ctx, clinicID, doctorID)
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return errors.New("doctor not found")
+	}
+	return s.clinicRepo.Delete(ctx, clinicID, doc.ID)
 }

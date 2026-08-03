@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"doctor-service/dto"
@@ -18,14 +19,20 @@ type LicenseService interface {
 }
 
 type DefaultLicenseService struct {
+	doctorRepo  repositories.DoctorRepository
 	licenseRepo repositories.LicenseRepository
 }
 
-func NewLicenseService(licenseRepo repositories.LicenseRepository) LicenseService {
-	return &DefaultLicenseService{licenseRepo: licenseRepo}
+func NewLicenseService(doctorRepo repositories.DoctorRepository, licenseRepo repositories.LicenseRepository) LicenseService {
+	return &DefaultLicenseService{doctorRepo: doctorRepo, licenseRepo: licenseRepo}
 }
 
 func (s *DefaultLicenseService) AddLicense(ctx context.Context, doctorID uuid.UUID, req dto.AddLicenseRequest) (*dto.LicenseResponse, error) {
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return nil, errors.New("doctor not found")
+	}
+
 	var issueDate, expiryDate *time.Time
 	if req.IssueDate != "" {
 		if t, err := time.Parse("2006-01-02", req.IssueDate); err == nil {
@@ -39,7 +46,7 @@ func (s *DefaultLicenseService) AddLicense(ctx context.Context, doctorID uuid.UU
 	}
 
 	license := &entities.DoctorLicense{
-		DoctorID:            doctorID,
+		DoctorID:            doc.ID,
 		RegistrationNumber:  req.RegistrationNumber,
 		RegistrationCouncil: req.RegistrationCouncil,
 		RegistrationYear:    req.RegistrationYear,
@@ -65,7 +72,12 @@ func (s *DefaultLicenseService) AddLicense(ctx context.Context, doctorID uuid.UU
 }
 
 func (s *DefaultLicenseService) GetLicenses(ctx context.Context, doctorID uuid.UUID) ([]dto.LicenseResponse, error) {
-	licenses, err := s.licenseRepo.FindByDoctorID(ctx, doctorID)
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return nil, errors.New("doctor not found")
+	}
+
+	licenses, err := s.licenseRepo.FindByDoctorID(ctx, doc.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -86,5 +98,9 @@ func (s *DefaultLicenseService) GetLicenses(ctx context.Context, doctorID uuid.U
 }
 
 func (s *DefaultLicenseService) DeleteLicense(ctx context.Context, licenseID, doctorID uuid.UUID) error {
-	return s.licenseRepo.Delete(ctx, licenseID, doctorID)
+	doc, err := s.doctorRepo.FindByPublicID(ctx, doctorID)
+	if err != nil || doc == nil {
+		return errors.New("doctor not found")
+	}
+	return s.licenseRepo.Delete(ctx, licenseID, doc.ID)
 }

@@ -19,6 +19,7 @@ type JobRepository interface {
 	MarkCompleted(ctx context.Context, jobID uuid.UUID) error
 	MarkFailed(ctx context.Context, jobID uuid.UUID, errStr string) error
 	FindByDoctorID(ctx context.Context, doctorID uuid.UUID) ([]entities.VerificationJob, error)
+	FindByID(ctx context.Context, jobID uuid.UUID) (*entities.VerificationJob, error)
 }
 
 type GormJobRepository struct {
@@ -91,4 +92,13 @@ func (r *GormJobRepository) FindByDoctorID(ctx context.Context, doctorID uuid.UU
 	var jobs []entities.VerificationJob
 	err := r.db.WithContext(ctx).Where("doctor_id = ?", doctorID).Order("created_at DESC").Find(&jobs).Error
 	return jobs, err
+}
+
+func (r *GormJobRepository) FindByID(ctx context.Context, jobID uuid.UUID) (*entities.VerificationJob, error) {
+	var job entities.VerificationJob
+	err := r.db.WithContext(ctx).Where("job_id = ?", jobID).First(&job).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &job, err
 }

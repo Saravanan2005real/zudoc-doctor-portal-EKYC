@@ -83,18 +83,9 @@ func (s *DefaultVerificationPipelineService) ProcessVerificationJob(ctx context.
 		}
 	}()
 
-	// 2. Fetch Doctor
-	jobs, err := s.jobRepo.FindByDoctorID(ctx, jobID)
-	var currentJob *entities.VerificationJob
-	if err == nil {
-		for _, j := range jobs {
-			if j.JobID == jobID {
-				currentJob = &j
-				break
-			}
-		}
-	}
-	if currentJob == nil {
+	// 2. Fetch Job
+	currentJob, err := s.jobRepo.FindByID(ctx, jobID)
+	if err != nil || currentJob == nil {
 		pipelineErr = errors.New("verification job record not found")
 		return pipelineErr
 	}

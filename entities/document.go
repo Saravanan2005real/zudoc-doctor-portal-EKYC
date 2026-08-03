@@ -11,12 +11,14 @@ type DocumentType string
 type OCRStatus string
 
 const (
-	DocumentTypeRegistrationCertificate DocumentType = "REGISTRATION_CERTIFICATE"
-	DocumentTypeMBBSCertificate         DocumentType = "MBBS_CERTIFICATE"
-	DocumentTypeMDCertificate           DocumentType = "MD_CERTIFICATE"
-	DocumentTypeAadhaar                 DocumentType = "AADHAAR"
-	DocumentTypePAN                     DocumentType = "PAN"
-	DocumentTypePassport                DocumentType = "PASSPORT"
+	DocumentTypeRegistrationCertificate  DocumentType = "REGISTRATION_CERTIFICATE"
+	DocumentTypeMBBSCertificate          DocumentType = "MBBS_CERTIFICATE"
+	DocumentTypeMDCertificate            DocumentType = "MD_CERTIFICATE"
+	DocumentTypeMedicalDegreeCertificate DocumentType = "MEDICAL_DEGREE_CERTIFICATE"
+	DocumentTypePGCertificate            DocumentType = "PG_CERTIFICATE"
+	DocumentTypeAadhaar                  DocumentType = "AADHAAR"
+	DocumentTypePAN                      DocumentType = "PAN"
+	DocumentTypePassport                 DocumentType = "PASSPORT"
 
 	OCRStatusPending    OCRStatus = "PENDING"
 	OCRStatusProcessing OCRStatus = "PROCESSING"

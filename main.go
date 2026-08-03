@@ -32,7 +32,6 @@ import (
 	"doctor-service/verification/fraud"
 	"doctor-service/worker"
 
-	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -46,11 +45,11 @@ func main() {
 	// Load Configuration
 	appCfg := config.LoadConfig()
 
-	// 1. Setup DB Connection (PostgreSQL with Pure-Go SQLite fallback)
+	// 1. Setup DB Connection (PostgreSQL only — no fallback)
 	dbHost := getEnv("DB_HOST", "localhost")
-	dbPort := getEnv("DB_PORT", "5432")
+	dbPort := getEnv("DB_PORT", "5433")
 	dbUser := getEnv("DB_USER", "postgres")
-	dbPass := getEnv("DB_PASSWORD", "secretpassword")
+	dbPass := getEnv("DB_PASSWORD", "dinesh_2006")
 	dbName := getEnv("DB_NAME", "doctor_verification_db")
 
 	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
@@ -70,21 +69,11 @@ func main() {
 		Logger: customLogger,
 	}
 
-	// Try PostgreSQL connection silently
-	silentConfig := &gorm.Config{Logger: logger.Discard}
-	db, err := gorm.Open(postgres.Open(dsn), silentConfig)
+	db, err := gorm.Open(postgres.Open(dsn), gormConfig)
 	if err != nil {
-		log.Printf("[DB NOTICE] PostgreSQL not available on %s:%s. Falling back to local embedded database (SQLite: ./doctor_verification.db)...", dbHost, dbPort)
-
-		db, err = gorm.Open(sqlite.Open("./doctor_verification.db"), gormConfig)
-		if err != nil {
-			log.Fatalf("[DB FATAL] Failed to initialize database: %v", err)
-		}
-		log.Println("[DB] Successfully initialized local embedded database (SQLite: ./doctor_verification.db).")
-	} else {
-		db.Logger = customLogger
-		log.Println("[DB] Successfully connected to PostgreSQL database.")
+		log.Fatalf("[DB FATAL] Failed to connect to PostgreSQL on %s:%s. Error: %v", dbHost, dbPort, err)
 	}
+	log.Println("[DB] Successfully connected to PostgreSQL database.")
 
 	// Auto Migrate database schema
 	log.Println("[DB] Running schema auto-migrations...")
@@ -160,9 +149,9 @@ func main() {
 
 	authService := services.NewAuthService(doctorRepo, otpRepo, refreshRepo, smsProv, jwtMgr, refreshTokenMgr, appCfg)
 	profileService := services.NewProfileService(doctorRepo)
-	licenseService := services.NewLicenseService(licenseRepo)
-	qualService := services.NewQualificationService(qualRepo)
-	clinicService := services.NewClinicService(clinicRepo)
+	licenseService := services.NewLicenseService(doctorRepo, licenseRepo)
+	qualService := services.NewQualificationService(doctorRepo, qualRepo)
+	clinicService := services.NewClinicService(doctorRepo, clinicRepo)
 	docService := services.NewDocumentService(doctorRepo, docRepo, storageProv, fileValidator, virusScanner)
 	submissionService := services.NewSubmissionService(doctorRepo, licenseRepo, qualRepo, clinicRepo, docRepo, historyRepo, jobRepo)
 	adminReviewService := services.NewAdminReviewService(doctorRepo, licenseRepo, qualRepo, clinicRepo, docRepo, ocrRepo, historyRepo, adminActionRepo, noteRepo, flagRepo, notificationProv, comparator)
