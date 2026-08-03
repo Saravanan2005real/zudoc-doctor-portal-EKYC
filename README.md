@@ -1,14 +1,18 @@
-# 🩺 ZuDoc — Enterprise Doctor Verification & eKYC Portal
+# ZuDoc — Enterprise Doctor Verification & eKYC Portal
 
-> A production-grade, full-stack **Doctor Identity Verification System** built with **Go (Golang)** backend and a modern **HTML/CSS/JS** frontend. Designed for healthcare platforms to onboard, verify, and manage doctors through a secure, multi-step eKYC pipeline.
+> Production-grade **Doctor Identity Verification (eKYC)** for healthcare platforms. Built with a **Go** HTTP API and a modern **HTML/CSS/JS** portal so teams can onboard, verify, and manage doctors through a secure multi-step pipeline — from OTP registration to NMC-aligned review and RSA-signed prescriptions.
 
-![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square&logo=go)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?style=flat-square&logo=postgresql)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?style=flat-square&logo=postgresql)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker)](https://docs.docker.com/compose/)
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?style=flat-square&logo=githubactions)](.github/workflows/ci-cd.yml)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](#-license)
+
+**Repository:** [github.com/Saravanan2005real/zudoc-doctor-portal-EKYC](https://github.com/Saravanan2005real/zudoc-doctor-portal-EKYC)
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#-overview)
 - [Key Features](#-key-features)
@@ -16,70 +20,82 @@
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
 - [Prerequisites](#-prerequisites)
-- [Installation & Setup](#-installation--setup)
+- [Quick Start](#-quick-start)
+- [Installation & Local Setup](#-installation--local-setup)
 - [Running the Application](#-running-the-application)
+- [Docker Compose](#-docker-compose)
+- [Kubernetes](#-kubernetes)
 - [API Reference](#-api-reference)
 - [Doctor Verification Workflow](#-doctor-verification-workflow)
 - [Security Features](#-security-features)
 - [Admin Portal](#-admin-portal)
 - [Configuration](#-configuration)
+- [Documentation](#-documentation)
+- [CI/CD](#-cicd)
 - [Contributing](#-contributing)
+- [License](#-license)
 
 ---
 
-## 🔍 Overview
+## Overview
 
-ZuDoc is an **enterprise-grade doctor verification and eKYC (Electronic Know Your Customer) platform** that automates the entire doctor onboarding lifecycle — from registration and OTP-based identity verification, through document upload and OCR-based validation, to NMC (National Medical Commission) registry cross-referencing and AI-powered fraud detection.
+ZuDoc is an **enterprise doctor verification and eKYC platform** that automates the doctor onboarding lifecycle:
 
-The system follows a **5-step wizard workflow** that guides doctors through:
-1. **Account Registration & OTP Verification**
-2. **Medical Credentials & Profile Setup**
-3. **Secure Document Vault Upload**
-4. **Automated Verification Pipeline**
-5. **Digital Prescription Studio (RSA-256 Signed)**
+1. **Account registration** with password hashing and OTP mobile verification  
+2. **Medical credentials** — license, qualifications, clinic profile  
+3. **Secure document vault** — registration certificate, degree, optional PG cert, KYC (Aadhaar/PAN/Passport)  
+4. **Automated verification pipeline** — OCR → council registry → fraud scoring → decision  
+5. **Admin review** — approve / reject / request documents, with DLQ retry  
+6. **Digital prescription studio** — RSA-256 signed, tamper-evident prescriptions (verified doctors only)
 
----
-
-## ✨ Key Features
-
-### Doctor-Facing Features
-- **Secure Registration & Login** — Password-hashed (bcrypt) accounts with account lockout protection
-- **OTP-Based Mobile Verification** — 6-digit secure OTP with expiry and max-attempt limits
-- **Split-Pane Auth UI** — Modern login/signup toggle interface with password visibility toggle
-- **Medical License Management** — Save registration number, council, and year with dropdown for 40+ Indian Medical Councils
-- **Qualification & Clinic Profiles** — Degree, specialization, hospital, and consultation fee management
-- **Secure Document Vault** — Upload Medical Registration Certificate, Medical Degree Certificate, Post Graduate Certificate (optional), and KYC documents (Aadhaar/PAN/Passport)
-- **SHA-256 File Hashing** — Every uploaded document is hashed for tamper-proof integrity
-- **Virus Scanning** — All uploads pass through a virus scanner before being accepted
-- **Real-Time Checklist** — Pre-submission verification checklist with dynamic green checkmarks
-- **Delete Documents** — Remove individual documents with automatic checklist rollback
-- **RSA-256 Digital Prescriptions** — Cryptographically signed, tamper-proof prescriptions with QR payloads
-
-### Admin-Facing Features
-- **Admin Analytics Dashboard** — Total doctors, pending reviews, auto-verification rate, dead letter queue metrics
-- **Search & Filter** — Search doctors by name, mobile, or public ID
-- **Side-by-Side Inspector** — Compare doctor-submitted claims against NMC registry data
-- **Levenshtein Similarity Matching** — AI-based name matching with fraud scoring
-- **Approve / Reject / Request Documents** — Full admin action workflow
-- **Dead Letter Queue (DLQ)** — Failed verification jobs are captured and can be retried
-
-### Infrastructure & Security
-- **Public/Internal ID Architecture** — External APIs use UUID-based Public IDs; database uses internal IDs to prevent IDOR attacks
-- **JWT + Refresh Token Authentication** — Short-lived access tokens with secure refresh rotation
-- **Rate Limiting** — Request throttling to prevent brute-force and DDoS attacks
-- **Account Lockout** — Automatic lockout after consecutive failed login attempts
-- **Password Policy Enforcement** — Minimum complexity requirements for passwords
-- **Background Worker Pool** — Async verification pipeline processing with retry logic
-- **Event Bus** — In-memory event bus for decoupled service communication
+The portal serves a **5-step wizard** for doctors and a full **admin analytics + inspector** console from the same Go process.
 
 ---
 
-## 🏗️ Architecture
+## Key Features
+
+### Doctor-facing
+
+| Feature | Detail |
+|---------|--------|
+| Secure registration & login | bcrypt passwords, account lockout after failed attempts |
+| OTP mobile verification | 6-digit OTP with expiry and max-attempt limits |
+| Split-pane auth UI | Login / Sign Up toggle, password visibility controls |
+| Medical license management | Registration number, year, **40+ Indian Medical Councils** |
+| Qualifications & clinics | Degree, specialization, hospital, consultation fee |
+| Document vault | Registration cert, Medical Degree, optional PG cert, KYC proof |
+| Integrity & safety | SHA-256 file hashing, virus-scan hook, type/size validation |
+| Live checklist | Pre-submission checklist with dynamic completion state |
+| Document delete | Remove uploads with checklist rollback |
+| RSA-256 prescriptions | Cryptographically signed prescriptions + QR payload |
+
+### Admin-facing
+
+- Analytics dashboard (totals, pending reviews, auto-verify rate, DLQ depth)
+- Search by name, mobile, or public UUID
+- Side-by-side inspector (claims vs NMC/council data)
+- Levenshtein similarity matching and fraud scoring
+- Approve / Reject / Request documents
+- Dead Letter Queue view and retry
+
+### Infrastructure & security
+
+- **Public UUID ↔ internal ID** translation (IDOR hardening)
+- JWT access + refresh token rotation
+- Per-route rate limiting
+- Background worker pool for async verification
+- In-memory event bus (RabbitMQ-ready via Compose)
+- Health probes + metrics endpoints
+- Docker Compose + Kubernetes manifests
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Frontend (HTML/CSS/JS)                │
-│              Modern Emerald-Green Theme UI               │
+│              Emerald-green light-theme UI                │
 │         5-Step Wizard + Admin Portal Dashboard           │
 └──────────────────────┬──────────────────────────────────┘
                        │ HTTP REST API
@@ -87,197 +103,186 @@ The system follows a **5-step wizard workflow** that guides doctors through:
 │                   Go HTTP Server                         │
 │              Rate Limiter ← Security Guard               │
 │                                                          │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐  │
-│  │    Auth      │  │  Credential  │  │   Document     │  │
-│  │  Controller  │  │  Controllers │  │   Controller   │  │
-│  └──────┬───────┘  └──────┬───────┘  └───────┬────────┘  │
-│         │                 │                  │           │
-│  ┌──────▼─────────────────▼──────────────────▼────────┐  │
-│  │              Service Layer (ID Translation)         │  │
-│  │    PublicID → InternalID mapping via DoctorRepo     │  │
-│  └──────┬─────────────────┬──────────────────┬────────┘  │
-│         │                 │                  │           │
-│  ┌──────▼─────────────────▼──────────────────▼────────┐  │
-│  │            Repository Layer (GORM ORM)              │  │
-│  └──────┬─────────────────────────────────────────────┘  │
-│         │                                                │
-│  ┌──────▼─────────────────────────────────────────────┐  │
-│  │              PostgreSQL 15 Database                 │  │
-│  └────────────────────────────────────────────────────┘  │
+│  Controllers → Services (PublicID → InternalID)          │
+│                     ↓                                    │
+│              Repositories (GORM)                         │
+│                     ↓                                    │
+│              PostgreSQL 15                               │
 │                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │         Background Verification Worker              │  │
-│  │   OCR → Council Registry → Fraud Engine → Decision  │  │
-│  └────────────────────────────────────────────────────┘  │
+│  Background Worker: OCR → Council → Fraud → Decision     │
 └──────────────────────────────────────────────────────────┘
 ```
 
+For Mermaid diagrams (system context, sequences, pipeline, deployment), see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).  
+For design rationale and domain model, see [`DESIGN.md`](DESIGN.md).
+
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
-| **Backend** | Go 1.26+, net/http (stdlib) |
-| **Database** | PostgreSQL 15 |
-| **ORM** | GORM v2 |
-| **Authentication** | JWT (golang-jwt/v5), bcrypt, OTP |
-| **Frontend** | HTML5, Vanilla CSS, Vanilla JavaScript |
-| **Typography** | Google Fonts (Outfit, JetBrains Mono) |
-| **Cryptography** | RSA-256 (Digital Signatures), SHA-256 (File Hashing), AES-GCM (Encryption) |
-| **File Storage** | Local filesystem (pluggable to S3/GCS) |
+|-------|------------|
+| Backend | Go **1.22+**, `net/http` |
+| Database | **PostgreSQL 15** (required — no SQLite fallback) |
+| ORM | GORM v2 |
+| Auth | JWT (`golang-jwt/v5`), bcrypt, OTP |
+| Frontend | HTML5, CSS, Vanilla JavaScript |
+| Typography | Outfit, JetBrains Mono |
+| Crypto | RSA-256 (prescriptions), SHA-256 (files), AES-GCM helpers |
+| Storage | Local FS (pluggable S3 / Cloudinary) |
+| Messaging | In-process event bus; RabbitMQ + Redis in Compose |
+| Deploy | Docker, Docker Compose, Kubernetes, Nginx |
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-eKYC/
-├── auth/                       # Authentication modules
-│   ├── jwt/                    # JWT token generation & validation
-│   ├── otp/                    # OTP generation, hashing & verification
-│   ├── password/               # bcrypt password hashing & policy
-│   └── token/                  # Refresh token management
-├── config/                     # App configuration & feature flags
-├── controllers/                # HTTP request handlers
-│   ├── auth_controller.go      # Register, Login, Verify OTP
-│   ├── document_controller.go  # Upload, List, Delete documents
-│   ├── license_controller.go   # Medical license CRUD
-│   ├── qualification_controller.go
-│   ├── clinic_controller.go
-│   ├── submission_controller.go
-│   ├── admin_controller.go     # Admin review actions
-│   ├── analytics_controller.go # Dashboard metrics
-│   ├── prescription_controller.go
-│   └── dlq_controller.go       # Dead Letter Queue management
-├── dto/                        # Data Transfer Objects (request/response)
-├── entities/                   # Database entity models (GORM)
-├── events/                     # In-memory event bus
-├── notifications/              # Notification providers (mock)
-├── observability/              # Health checks & metrics
-├── ocr/                        # OCR engine (mock provider)
-├── prescriptions/              # RSA-256 digital prescription generator
-├── public/                     # Frontend static files
-│   ├── index.html              # Main SPA page (5-step wizard + admin)
-│   ├── app.js                  # Frontend application logic
-│   └── styles.css              # Emerald-green themed CSS
-├── repositories/               # Database access layer (GORM repositories)
-├── security/                   # Rate limiter, encryption, auth guards
-├── services/                   # Business logic layer
-│   ├── auth_service.go         # Registration, login, OTP flow
-│   ├── license_service.go      # License CRUD with ID translation
-│   ├── qualification_service.go
-│   ├── clinic_service.go
-│   ├── document_service.go     # Upload, hash, scan, store
-│   ├── submission_service.go   # Pre-submission checklist validation
-│   ├── verification_pipeline.go # Background OCR + council verification
-│   ├── admin_review_service.go # Admin approve/reject/request docs
-│   └── analytics_service.go   # Dashboard metrics aggregation
-├── sms/                        # SMS providers (Mock + Twilio + MSG91)
-├── storage/                    # File storage abstraction
-│   ├── providers/local/        # Local filesystem storage
-│   └── validator.go            # File type, size, resolution validation
-├── verification/               # Verification engines
-│   ├── comparison/             # Levenshtein string similarity
-│   ├── council/                # NMC registry adapter
-│   ├── decision/               # Auto-verify decision engine
-│   └── fraud/                  # Fraud score calculator
-├── worker/                     # Background job worker pool
-├── main.go                     # Application entry point & DI wiring
-├── go.mod                      # Go module definition
-├── go.sum                      # Dependency checksums
-├── Dockerfile                  # Container build configuration
-└── docker-compose.yml          # Multi-service orchestration
+zudoc-doctor-portal-EKYC/
+├── auth/                 # JWT, OTP, password, refresh tokens
+├── config/               # App config & feature flags
+├── controllers/          # HTTP handlers (auth, docs, admin, …)
+├── dto/                  # Request/response DTOs
+├── entities/             # GORM models
+├── events/               # Event bus (+ RabbitMQ helper)
+├── notifications/        # Notification providers (mock)
+├── observability/        # Health & metrics
+├── ocr/                  # OCR providers (mock / Azure / Google)
+├── prescriptions/        # RSA-256 prescription generator
+├── public/               # SPA: index.html, app.js, styles.css
+├── repositories/         # Data access
+├── security/             # Rate limit, encryption, RBAC, guards
+├── services/             # Business logic & verification pipeline
+├── sms/                  # Mock / Twilio / MSG91
+├── storage/              # Storage abstraction + validators
+├── verification/         # Comparison, council, fraud, decision
+├── worker/               # Background job worker
+├── migrations/           # SQL schema migrations
+├── docs/                 # Architecture + OpenAPI
+├── k8s/                  # Deployment, Service, Ingress, HPA, …
+├── .github/workflows/    # CI/CD
+├── main.go               # Entry point & DI wiring
+├── Dockerfile
+├── docker-compose.yml
+├── DESIGN.md
+└── README.md
 ```
 
 ---
 
-## 📦 Prerequisites
+## Prerequisites
 
-Before running this project, ensure you have the following installed:
+| Requirement | Version | Notes |
+|-------------|---------|--------|
+| Go | 1.22+ | [golang.org/dl](https://golang.org/dl/) |
+| PostgreSQL | 15+ | Required at runtime |
+| Git | Latest | |
+| Docker (optional) | Latest | For Compose / image builds |
+| kubectl (optional) | Latest | For Kubernetes deploy |
 
-| Requirement | Version | Download |
-|-------------|---------|----------|
-| **Go** | 1.26 or higher | [golang.org/dl](https://golang.org/dl/) |
-| **PostgreSQL** | 15+ | [postgresql.org](https://www.postgresql.org/download/) |
-| **Git** | Latest | [git-scm.com](https://git-scm.com/) |
+### Windows: GOROOT
 
-### Important: GOROOT Configuration
-
-Make sure your `GOROOT` environment variable points to the Go installation directory (NOT the `bin` folder):
+`GOROOT` must point at the Go **install root**, not `bin`:
 
 ```
-✅ Correct: GOROOT = C:\Program Files\Go
-❌ Wrong:   GOROOT = C:\Program Files\Go\bin
+Correct: C:\Program Files\Go
+Wrong:   C:\Program Files\Go\bin
 ```
 
-To fix permanently on Windows:
 ```powershell
 [System.Environment]::SetEnvironmentVariable('GOROOT', 'C:\Program Files\Go', [System.EnvironmentVariableTarget]::User)
 ```
 
 ---
 
-## 🚀 Installation & Setup
-
-### 1. Clone the Repository
+## Quick Start
 
 ```bash
 git clone https://github.com/Saravanan2005real/zudoc-doctor-portal-EKYC.git
 cd zudoc-doctor-portal-EKYC
 ```
 
-### 2. Create the PostgreSQL Database
+**Option A — Docker Compose (recommended for first run)**
+
+```bash
+docker compose up --build
+```
+
+Open **http://localhost** (Nginx) or **http://localhost:8080** (app directly).
+
+**Option B — Local Go + PostgreSQL**
+
+```bash
+# Create DB
+psql -U postgres -c "CREATE DATABASE doctor_verification_db;"
+
+go mod tidy
+# Set DB_* env vars to match your Postgres, then:
+go run .
+```
+
+Open **http://localhost:8080/**
+
+---
+
+## Installation & Local Setup
+
+### 1. Clone
+
+```bash
+git clone https://github.com/Saravanan2005real/zudoc-doctor-portal-EKYC.git
+cd zudoc-doctor-portal-EKYC
+```
+
+### 2. Create PostgreSQL database
 
 ```sql
 CREATE DATABASE doctor_verification_db;
 ```
 
-Or via command line:
-```bash
-psql -U postgres -c "CREATE DATABASE doctor_verification_db;"
-```
-
-### 3. Install Go Dependencies
+### 3. Install dependencies
 
 ```bash
 go mod tidy
 ```
 
-### 4. Configure Database Connection
-
-The database connection is configured in `main.go` with environment variable overrides:
+### 4. Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DB_HOST` | `localhost` | PostgreSQL host |
 | `DB_PORT` | `5433` | PostgreSQL port |
 | `DB_USER` | `postgres` | Database user |
-| `DB_PASSWORD` | *(set in code)* | Database password |
+| `DB_PASSWORD` | *(from env / local config)* | Database password |
 | `DB_NAME` | `doctor_verification_db` | Database name |
-| `JWT_SECRET` | `super-secret-jwt-key-2026` | JWT signing secret |
-| `PORT` | `8080` | HTTP server port |
+| `JWT_SECRET` | *(change in production)* | JWT signing secret |
+| `PORT` | `8080` | HTTP listen port |
+| `SMS_PROVIDER` | `MOCK` | `MOCK` / `TWILIO` / `MSG91` |
 
-You can override any of these via environment variables:
+Example (PowerShell):
+
 ```powershell
-$env:DB_PORT="5432"; $env:DB_PASSWORD="yourpassword"; go run .
+$env:DB_PORT="5432"
+$env:DB_PASSWORD="yourpassword"
+$env:JWT_SECRET="replace-me-in-production"
+go run .
 ```
+
+> **Security:** Never commit real secrets. Prefer environment variables or Kubernetes Secrets. Rotate `JWT_SECRET` and DB credentials before any shared/staging deploy.
 
 ---
 
-## ▶️ Running the Application
-
-### Start the Server
+## Running the Application
 
 ```powershell
-# Windows (PowerShell)
+# Windows
 $env:GOROOT="C:\Program Files\Go"; go run .
 
 # Linux / macOS
 go run .
 ```
 
-### Expected Output
+Expected log excerpt:
 
 ```
 =======================================================
@@ -291,178 +296,238 @@ Server listening and serving HTTP on port 8080...
 Ready to receive requests at http://localhost:8080/
 ```
 
-### Access the Application
+If PostgreSQL is unreachable, the process **exits fatally** with a clear error (no silent fallback).
 
-Open your browser and navigate to: **http://localhost:8080/**
+### Tests
+
+```bash
+go vet ./...
+go test ./...
+```
 
 ---
 
-## 📡 API Reference
+## Docker Compose
 
-### Authentication APIs
+`docker-compose.yml` brings up:
+
+| Service | Port(s) | Role |
+|---------|---------|------|
+| `doctor-service` | `8080` | API + portal |
+| `postgres` | `5432` | Primary DB |
+| `redis` | `6379` | Cache / lock helper |
+| `rabbitmq` | `5672`, `15672` | Messaging (+ management UI) |
+| `nginx` | `80` | Reverse proxy |
+
+```bash
+docker compose up --build
+docker compose down
+```
+
+Compose sets `DB_HOST=postgres`, `DB_PORT=5432`, and related secrets via environment blocks. Override secrets for any non-local environment.
+
+---
+
+## Kubernetes
+
+Manifests live under [`k8s/`](k8s/):
+
+| File | Purpose |
+|------|---------|
+| `deployment.yaml` | App Deployment |
+| `service.yaml` | ClusterIP / Service |
+| `ingress.yaml` | Ingress rules |
+| `configmap.yaml` | Non-secret config |
+| `secret.yaml` | Secrets template |
+| `hpa.yaml` | Horizontal Pod Autoscaler |
+
+Apply (after editing secrets/config for your cluster):
+
+```bash
+kubectl apply -f k8s/
+```
+
+Probes: `/health/live`, `/health/ready`. Metrics: `/metrics`.
+
+---
+
+## API Reference
+
+> Doctor-scoped routes expect the doctor’s public UUID (see portal / auth flow). Prefer JWT where wired by the security layer.
+
+### Authentication
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/v1/doctors/register` | Register a new doctor account |
+| `POST` | `/api/v1/doctors/register` | Register doctor |
 | `POST` | `/api/v1/doctors/verify-otp` | Verify mobile OTP |
-| `POST` | `/api/v1/doctors/login` | Login with email/mobile + password |
+| `POST` | `/api/v1/doctors/login` | Login |
 
-### Doctor Profile APIs
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET/PUT` | `/api/v1/doctors/profile` | Get or update doctor profile |
-| `POST/GET` | `/api/v1/doctors/licenses` | Add or list medical licenses |
-| `POST/GET` | `/api/v1/doctors/qualifications` | Add or list qualifications |
-| `POST/GET` | `/api/v1/doctors/clinics` | Add or list clinic listings |
-
-### Document Management APIs
+### Profile & credentials
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/v1/doctors/documents` | Upload a document (multipart) |
-| `GET` | `/api/v1/doctors/documents` | List all uploaded documents |
-| `DELETE` | `/api/v1/doctors/documents?document_id=UUID` | Delete a specific document |
+| `GET` / `PUT` | `/api/v1/doctors/profile` | Profile |
+| `POST` / `GET` | `/api/v1/doctors/licenses` | Medical licenses |
+| `POST` / `GET` | `/api/v1/doctors/qualifications` | Qualifications |
+| `POST` / `GET` | `/api/v1/doctors/clinics` | Clinics |
 
-### Verification APIs
+### Documents
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/v1/doctors/submit-verification` | Submit application for verification |
-| `POST` | `/api/v1/prescriptions` | Generate RSA-256 signed prescription |
+| `POST` | `/api/v1/doctors/documents` | Upload (multipart) |
+| `GET` | `/api/v1/doctors/documents` | List |
+| `DELETE` | `/api/v1/doctors/documents?document_id=UUID` | Delete |
 
-### Admin APIs
+### Verification & prescriptions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/doctors/submit-verification` | Submit for pipeline |
+| `POST` | `/api/v1/prescriptions` | RSA-256 signed prescription |
+
+### Admin
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/v1/admin/analytics` | Dashboard metrics |
-| `GET` | `/api/v1/admin/search?q=query` | Search doctors |
-| `GET` | `/api/v1/admin/verifications/detail?doctor_id=UUID` | Inspector detail |
-| `POST` | `/api/v1/admin/verifications/approve` | Approve a doctor |
-| `POST` | `/api/v1/admin/verifications/reject` | Reject a doctor |
-| `POST` | `/api/v1/admin/verifications/request-documents` | Request better scans |
+| `GET` | `/api/v1/admin/search?q=` | Search doctors |
+| `GET` | `/api/v1/admin/verifications/detail?doctor_id=` | Inspector |
+| `POST` | `/api/v1/admin/verifications/approve` | Approve |
+| `POST` | `/api/v1/admin/verifications/reject` | Reject |
+| `POST` | `/api/v1/admin/verifications/request-documents` | Request docs |
 
-### Health & Observability
+### Health
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health/live` | Liveness probe |
-| `GET` | `/health/ready` | Readiness probe |
-| `GET` | `/metrics` | Application metrics |
+| `GET` | `/health/live` | Liveness |
+| `GET` | `/health/ready` | Readiness (DB) |
+| `GET` | `/metrics` | Metrics |
 
-> **Note:** All doctor-specific APIs require the `X-Doctor-Public-ID` header with the doctor's UUID.
-
----
-
-## 🔄 Doctor Verification Workflow
-
-### Step 1: Account & OTP Verification
-- Doctor registers with name, mobile, email, and password
-- A 6-digit OTP is sent to the registered mobile number
-- OTP must be verified within the configured time window
-- On successful OTP verification, JWT tokens are issued
-
-### Step 2: Medical Credentials & Profile
-- **Medical License**: Registration number, council (40+ Indian councils supported), and year
-- **Qualifications**: Degree (MBBS/MD), specialization, college, and completion year
-- **Clinic Practice**: Hospital name, city, and consultation fee
-
-### Step 3: Document Vault Upload
-Documents are categorized as:
-
-| Document | Type | Required |
-|----------|------|----------|
-| Medical Registration Certificate | `REGISTRATION_CERTIFICATE` | ✅ Mandatory |
-| Medical Degree Certificate | `MEDICAL_DEGREE_CERTIFICATE` | ✅ Mandatory |
-| Post Graduate Certificate | `PG_CERTIFICATE` | ❌ Optional |
-| Aadhaar Card | `AADHAAR` | ✅ Any one KYC |
-| PAN Card | `PAN` | ✅ Any one KYC |
-| Passport | `PASSPORT` | ✅ Any one KYC |
-
-All uploads are:
-- Virus-scanned before acceptance
-- SHA-256 hashed for integrity verification
-- Stored with version tracking
-
-### Step 4: Automated Verification Pipeline
-A background worker picks up the submitted application and runs:
-1. **OCR Text Extraction** — Extracts registration numbers and names from document scans
-2. **NMC Council Registry Verification** — Queries the official medical registry database
-3. **AI Fraud & Levenshtein Analysis** — Cross-references document data with submitted claims
-4. **Final Decision** — Auto-verify, flag for manual review, or reject
-
-### Step 5: Digital Prescription Studio
-Once verified, doctors can issue **RSA-256 digitally signed prescriptions** with:
-- Unique prescription IDs
-- Patient details and diagnosis
-- Prescribed medication list
-- Cryptographic digital signature
-- QR code payload for verification
+Full machine-readable contract: [`docs/openapi.yaml`](docs/openapi.yaml).
 
 ---
 
-## 🔒 Security Features
+## Doctor Verification Workflow
 
-| Feature | Implementation |
-|---------|---------------|
-| **Password Hashing** | bcrypt with salt |
-| **JWT Tokens** | Short-lived (15 min) access + long-lived refresh tokens |
-| **OTP Security** | SHA-256 hashed OTPs with expiry and max attempts |
-| **ID Protection** | External Public UUID ↔ Internal Database ID translation |
-| **Rate Limiting** | 60 requests/minute per endpoint |
-| **Account Lockout** | Auto-lock after 5 failed login attempts |
-| **File Validation** | Type, size (10MB max), and resolution checks |
-| **Virus Scanning** | All uploads scanned before storage |
-| **IDOR Prevention** | Service-layer PublicID → InternalID enforcement |
+### Step 1 — Account & OTP
 
----
+Register → OTP to mobile → verify → tokens issued.
 
-## 🛡️ Admin Portal
+### Step 2 — Medical credentials
 
-The admin portal provides a comprehensive dashboard for managing doctor verification:
+- License: number, council, year  
+- Qualifications: degree, specialization, college, year  
+- Clinic: hospital, city, consultation fee  
 
-- **Metrics Dashboard**: Total registered doctors, pending reviews, auto-verification rate, DLQ count
-- **Search & Filter**: Find doctors by name, mobile number, or public ID
-- **Verification Inspector**: Side-by-side comparison of doctor claims vs NMC registry data
-- **Action Panel**: Approve, reject, or request additional documents
-- **Dead Letter Queue**: View and retry failed verification jobs
+### Step 3 — Document vault
 
----
+| Document | Type constant | Required |
+|----------|---------------|----------|
+| Medical Registration Certificate | `REGISTRATION_CERTIFICATE` | Yes |
+| Medical Degree Certificate | `MEDICAL_DEGREE_CERTIFICATE` | Yes |
+| Post Graduate Certificate | `PG_CERTIFICATE` | Optional |
+| Aadhaar / PAN / Passport | `AADHAAR` / `PAN` / `PASSPORT` | Any one KYC |
 
-## ⚙️ Configuration
+Uploads are validated, virus-scanned (hook), SHA-256 hashed, and versioned.
 
-### Feature Flags
+### Step 4 — Automated pipeline
 
-The application supports feature flags defined in `config/feature_flags.go`:
+Background worker:
 
-- `EnableAdvancedOCR` — Toggle advanced OCR processing
-- `EnableCouncilAPI` — Toggle live NMC council API calls
-- `EnableFraudDetection` — Toggle AI fraud scoring
-- `EnableNotifications` — Toggle SMS/email notifications
+1. OCR text/field extraction  
+2. Council / NMC registry lookup  
+3. Fraud + Levenshtein similarity analysis  
+4. Decision → auto-verify, manual review, or reject  
 
-### Medical Councils Supported
+### Step 5 — Prescription studio
 
-The dropdown includes 40+ Indian Medical Councils:
-Andhra Pradesh, Arunachal Pradesh, Assam, Bhopal, Bihar, Bombay, Chandigarh, Chhattisgarh, Delhi, Goa, Gujarat, Haryana, Himachal Pradesh, Hyderabad, Jammu & Kashmir, Jharkhand, Karnataka, Madhya Pradesh, Madras, Mahakoshal, Maharashtra, Manipur, Medical Council of Tanganyika, Meghalaya, Mizoram, Mysore, Nagaland, Orissa, Pondicherry, Punjab, Rajasthan, Sikkim, Tamil Nadu, Telangana, Travancore Cochin, Tripura, Uttar Pradesh, Uttarakhand, Vidarbha, West Bengal, and the National Medical Commission (NMC).
+Verified doctors can issue RSA-256 signed prescriptions with unique IDs, meds list, signature, and QR verification payload.
 
 ---
 
-## 🤝 Contributing
+## Security Features
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+| Control | Implementation |
+|---------|----------------|
+| Passwords | bcrypt |
+| Sessions | Short-lived JWT + refresh rotation |
+| OTP | Hashed OTP, expiry, attempt caps |
+| IDOR defense | Public UUID → internal ID in services |
+| Abuse | Rate limits; login lockout |
+| Uploads | Type/size/resolution checks + scanner hook |
+| Prescriptions | Verified-doctor guard |
+| Secrets | Env / K8s Secret (do not hardcode in prod) |
 
 ---
 
-## 📄 License
+## Admin Portal
 
-This project is licensed under the MIT License.
+- Metrics: registered doctors, pending queue, auto-verify rate, DLQ  
+- Search & filter  
+- Side-by-side claim vs registry inspector  
+- Approve / reject / request documents with notes  
+- DLQ retry for failed jobs  
+
+---
+
+## Configuration
+
+### Feature flags (`config/`)
+
+Typical toggles include advanced OCR, live council API, fraud detection, and notifications. Prefer flags for gradual rollout of external providers.
+
+### Medical councils
+
+UI dropdown covers **40+** Indian state/historical councils plus **NMC**, including Andhra Pradesh, Assam, Bihar, Delhi, Gujarat, Karnataka, Maharashtra, Tamil Nadu, Telangana, West Bengal, and others listed in the portal.
+
+---
+
+## Documentation
+
+| Doc | Contents |
+|-----|----------|
+| [`DESIGN.md`](DESIGN.md) | Goals, domain model, pipeline, security design |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Mermaid system / sequence / deploy diagrams |
+| [`docs/openapi.yaml`](docs/openapi.yaml) | OpenAPI contract |
+
+---
+
+## CI/CD
+
+GitHub Actions (`.github/workflows/ci-cd.yml`) on `main` / PRs:
+
+1. `go mod verify`  
+2. `go vet ./...`  
+3. `go test` (race + coverage)  
+4. Docker image build on `main`  
+
+---
+
+## Contributing
+
+1. Fork the repository  
+2. Create a feature branch: `git checkout -b feature/your-feature`  
+3. Commit with a clear message  
+4. Push and open a Pull Request  
+
+Guidelines:
+
+- Keep business logic in `services/`; avoid leaking GORM into controllers  
+- Extend verification via packages under `verification/`  
+- Update `docs/openapi.yaml` when changing HTTP contracts  
+- Prefer SQL migrations for production schema changes  
+
+---
+
+## License
+
+This project is licensed under the **MIT License**.
 
 ---
 
 <p align="center">
-  Built with ❤️ for the Indian Healthcare Ecosystem
+  Built for the Indian healthcare ecosystem — ZuDoc Doctor Portal eKYC
 </p>
