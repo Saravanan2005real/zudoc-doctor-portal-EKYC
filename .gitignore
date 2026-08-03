@@ -1,0 +1,40 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+doctor-service
+/bin/
+/dist/
+
+# Local databases & runtime data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+uploads/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Test / coverage
+coverage.out
+coverage.html
+*.test
+
+# Go
+vendor/

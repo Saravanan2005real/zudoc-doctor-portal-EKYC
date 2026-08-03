@@ -1,0 +1,120 @@
+openapi: 3.0.3
+info:
+  title: Enterprise Doctor Verification System API
+  description: Production-grade REST API specification for Practo-like Doctor KYC and Identity Verification system.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local Development Server
+  - url: https://verification.practo-doctor.portal/api/v1
+    description: Production Kubernetes Cluster
+paths:
+  /doctors/register:
+    post:
+      summary: Doctor Account Registration
+      operationId: registerDoctor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, mobile, email, password]
+              properties:
+                first_name: { type: string, example: "Rahul" }
+                last_name: { type: string, example: "Kumar" }
+                mobile: { type: string, example: "9876543210" }
+                email: { type: string, example: "rahul.kumar@hospital.com" }
+                password: { type: string, example: "ValidP@ssw0rd2026" }
+      responses:
+        '201':
+          description: Registration successful, OTP dispatched via SMS.
+        '400':
+          description: Validation error or duplicate mobile/email.
+
+  /doctors/verify-otp:
+    post:
+      summary: Verify Mobile OTP
+      operationId: verifyOTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp, purpose]
+              properties:
+                public_id: { type: string }
+                otp: { type: string, example: "123456" }
+                purpose: { type: string, example: "REGISTER" }
+      responses:
+        '200':
+          description: Mobile verified, JWT access and refresh tokens returned.
+
+  /doctors/login:
+    post:
+      summary: Doctor Login
+      operationId: loginDoctor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifier, password]
+              properties:
+                identifier: { type: string, example: "rahul.kumar@hospital.com" }
+                password: { type: string, example: "ValidP@ssw0rd2026" }
+      responses:
+        '200':
+          description: Login successful.
+
+  /doctors/documents:
+    post:
+      summary: Secure Multipart Document Upload
+      operationId: uploadDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, document_type]
+              properties:
+                file: { type: string, format: binary }
+                document_type: { type: string, example: "REGISTRATION_CERTIFICATE" }
+      responses:
+        '201':
+          description: Document uploaded securely, hash and version stored.
+
+  /doctors/submit-verification:
+    post:
+      summary: Submit Verification Application
+      operationId: submitVerification
+      responses:
+        '200':
+          description: Checklist passed, background verification job enqueued.
+
+  /admin/verifications/{doctorId}:
+    get:
+      summary: Single-Page Detailed Verification Review & Side-by-Side Comparison
+      parameters:
+        - name: doctorId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Aggregated verification details, side-by-side comparison, OCR results, and risk scores.
+
+  /admin/verifications/{doctorId}/approve:
+    post:
+      summary: Approve Doctor Verification
+      parameters:
+        - name: doctorId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Doctor status transitioned to VERIFIED, digital prescriptions enabled.

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: doctor-service-config
+  namespace: default
+data:
+  DB_HOST: "postgres"
+  DB_PORT: "5432"
+  DB_NAME: "doctor_verification_db"
+  REDIS_HOST: "redis:6379"
+  SMS_PROVIDER: "MOCK"
+  FEATURE_AUTO_APPROVE_ENABLED: "true"
+  FEATURE_ASYNC_EVENT_BUS: "true"
