@@ -5,6 +5,13 @@ Port: 5001
 
 import os
 import sys
+
+# Force UTF-8 encoding for stdout/stderr to prevent DeepFace emoji logging crashes on Windows
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 from types import ModuleType
 from importlib.machinery import ModuleSpec
 from unittest.mock import MagicMock
@@ -790,15 +797,11 @@ STEP2_HTML_TEMPLATE = """
                     <div class="card">
                         <div class="card-title">Extracted ID Details &nbsp; <span class="badge" id="doc-type-badge">-</span></div>
                         <div class="field">
-                            <span class="field-name">Name</span>
-                            <span class="field-val" id="res-name">-</span>
-                        </div>
-                        <div class="field">
-                            <span class="field-name" id="id-num-label">Aadhaar Number</span>
+                            <span class="field-name" id="id-num-label">ID Number</span>
                             <span class="field-val" id="res-idnum">-</span>
                         </div>
                         <div class="field">
-                            <span class="field-name" id="check-label">Verhoeff Check</span>
+                            <span class="field-name" id="check-label">Format Check</span>
                             <span id="res-valid">-</span>
                         </div>
                         <div class="field">
@@ -862,8 +865,6 @@ STEP2_HTML_TEMPLATE = """
                     const docBadge = document.getElementById('doc-type-badge');
                     docBadge.innerText = docType === 'PAN' ? 'PAN CARD' : (docType === 'AADHAAR' ? 'AADHAAR CARD' : 'UNKNOWN');
                     docBadge.className = 'badge ' + (docType === 'UNKNOWN' ? 'badge-error' : 'badge-success');
-
-                    document.getElementById('res-name').innerText = data.parsed_fields.name || 'Not Found';
 
                     let isValid = false;
                     let idNumber = '';
