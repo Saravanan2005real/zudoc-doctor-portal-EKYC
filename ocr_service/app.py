@@ -81,6 +81,12 @@ except Exception as e:
     print(f"RetinaFace load failed: {e}")
     RetinaFace = None
 
+try:
+    from deepface import DeepFace
+except Exception as e:
+    print(f"DeepFace load failed: {e}")
+    DeepFace = None
+
 # Restore stdout/stderr
 sys.stdout, sys.stderr = _old_stdout, _old_stderr
 
@@ -428,6 +434,7 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        let step1FaceFilename = "";
         const fileInput = document.getElementById('file-input');
         const imgPreview = document.getElementById('image-preview');
         const previewBox = document.getElementById('preview-box');
@@ -519,6 +526,7 @@ HTML_TEMPLATE = """
                     }
 
                     if (data.face_image_url) {
+                        step1FaceFilename = data.face_image_url.split('/').pop();
                         const faceImg = document.getElementById('extracted-face');
                         faceImg.src = data.face_image_url;
                         document.getElementById('face-card').style.display = 'block';
@@ -530,6 +538,7 @@ HTML_TEMPLATE = """
                     
                     // Show proceed button if validation passes
                     if (isValid) {
+                        localStorage.setItem('step1FaceFilename', step1FaceFilename);
                         document.getElementById('proceed-btn').style.display = 'block';
                     } else {
                         document.getElementById('proceed-btn').style.display = 'none';
@@ -792,6 +801,10 @@ STEP2_HTML_TEMPLATE = """
                             <span class="field-name" id="check-label">Verhoeff Check</span>
                             <span id="res-valid">-</span>
                         </div>
+                        <div class="field">
+                            <span class="field-name">Face Match (Step 1 vs Live)</span>
+                            <span id="res-face-match">-</span>
+                        </div>
                     </div>
 
                     <button id="finish-btn" class="btn" style="display: none; background: #10b981;">Verification Complete &check;</button>
@@ -823,9 +836,7 @@ STEP2_HTML_TEMPLATE = """
             canvas.height = video.videoHeight;
             const ctx = canvas.getContext('2d');
             
-            // Mirror the canvas context to match the mirrored video element
-            ctx.translate(canvas.width, 0);
-            ctx.scale(-1, 1);
+            // Draw normally without mirroring so OCR can read the text correctly
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             
             // Convert to base64
@@ -839,7 +850,10 @@ STEP2_HTML_TEMPLATE = """
                 const resp = await fetch('/api/v1/live_verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image: base64Image })
+                    body: JSON.stringify({ 
+                        image: base64Image,
+                        step1_face: localStorage.getItem('step1FaceFilename') || ''
+                    })
                 });
                 const data = await resp.json();
                 
@@ -869,6 +883,15 @@ STEP2_HTML_TEMPLATE = """
                     const validBadge = document.getElementById('res-valid');
                     validBadge.className = isValid ? 'badge badge-success' : 'badge badge-error';
                     validBadge.innerText = isValid ? 'VALID' : 'INVALID';
+                    
+                    const faceMatchBadge = document.getElementById('res-face-match');
+                    if (data.face_match !== undefined) {
+                        faceMatchBadge.className = data.face_match ? 'badge badge-success' : 'badge badge-error';
+                        faceMatchBadge.innerText = data.face_match ? 'MATCHED' : 'NOT MATCHED';
+                    } else {
+                        faceMatchBadge.className = 'badge';
+                        faceMatchBadge.innerText = 'N/A';
+                    }
                     
                     if (data.face_image_url) {
                         document.getElementById('extracted-face').src = data.face_image_url;
@@ -1397,12 +1420,27 @@ def live_verify_api():
 
         parsed_fields = parse_id_document(extracted_lines)
 
+        # 3. Face Matching (Step 1 vs Live)
+        face_match_result = None
+        step1_face_filename = data.get('step1_face')
+        if step1_face_filename and face_filename and DeepFace is not None:
+            step1_face_path = os.path.join(app.config['UPLOAD_FOLDER'], step1_face_filename)
+            live_face_path = os.path.join(app.config['UPLOAD_FOLDER'], face_filename)
+            if os.path.exists(step1_face_path) and os.path.exists(live_face_path):
+                try:
+                    # Enforce detection=False because we already cropped the faces to 112x112 using RetinaFace
+                    result = DeepFace.verify(img1_path=step1_face_path, img2_path=live_face_path, enforce_detection=False)
+                    face_match_result = result.get("verified", False)
+                except Exception as e:
+                    print(f"DeepFace verification failed: {e}")
+
         return jsonify({
             "status": "success",
             "face_image_url": f"/ocr_uploads/{face_filename}" if face_filename else None,
             "processed_image_url": f"/ocr_uploads/{doc_filename}",
             "parsed_fields": parsed_fields,
-            "raw_text": extracted_lines
+            "raw_text": extracted_lines,
+            "face_match": face_match_result
         })
         
     except Exception as e:
