@@ -773,6 +773,11 @@ STEP2_HTML_TEMPLATE = """
                         </div>
                     </div>
 
+                    <div class="card" id="live-doc-card" style="display: none;">
+                        <div class="card-title">Analyzed Document</div>
+                        <img id="live-doc-image" src="" style="width:100%; border-radius:8px; border: 1px solid var(--border-color);">
+                    </div>
+
                     <div class="card">
                         <div class="card-title">Extracted ID Details &nbsp; <span class="badge" id="doc-type-badge">-</span></div>
                         <div class="field">
@@ -870,6 +875,13 @@ STEP2_HTML_TEMPLATE = """
                         document.getElementById('face-card').style.display = 'block';
                     } else {
                         document.getElementById('face-card').style.display = 'none';
+                    }
+                    
+                    if (data.processed_image_url) {
+                        document.getElementById('live-doc-image').src = data.processed_image_url;
+                        document.getElementById('live-doc-card').style.display = 'block';
+                    } else {
+                        document.getElementById('live-doc-card').style.display = 'none';
                     }
                     
                     results.style.display = 'block';
@@ -1361,12 +1373,15 @@ def live_verify_api():
             face_path = os.path.join(app.config['UPLOAD_FOLDER'], face_filename)
             cv2.imwrite(face_path, face_img)
 
-        # 2. Document Extraction (PaddleOCR)
-        # Save temp image for PaddleOCR
-        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"temp_live_{filename_id}.jpg")
-        cv2.imwrite(temp_path, img)
+        # 2. Document Detection & Warp
+        doc_img, warped_ok = detect_and_warp_document(img)
+        doc_img = correct_brightness(doc_img)
+
+        doc_filename = f"live_doc_{filename_id}.jpg"
+        doc_path = os.path.join(app.config['UPLOAD_FOLDER'], doc_filename)
+        cv2.imwrite(doc_path, doc_img)
         
-        ocr_result = ocr.ocr(temp_path)
+        ocr_result = ocr.ocr(doc_path)
         
         extracted_lines = []
         if ocr_result and isinstance(ocr_result, list):
@@ -1385,6 +1400,7 @@ def live_verify_api():
         return jsonify({
             "status": "success",
             "face_image_url": f"/ocr_uploads/{face_filename}" if face_filename else None,
+            "processed_image_url": f"/ocr_uploads/{doc_filename}",
             "parsed_fields": parsed_fields,
             "raw_text": extracted_lines
         })
