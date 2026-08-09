@@ -1227,10 +1227,12 @@ def extract_and_correct_pan(text_lines):
     clean_text = re.sub(r'[,.\-_:;]', ' ', full_text)
     words = clean_text.split()
     
+    # 1. Look for exact match in words
     for word in words:
         if re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', word):
             return word
             
+    # 2. Look for 10-char alphanumeric word and try to correct OCR mistakes
     for word in words:
         if len(word) == 10 and word.isalnum():
             corrected = ''
@@ -1242,7 +1244,7 @@ def extract_and_correct_pan(text_lines):
                 else: corrected += char
             for char in word[5:9]:
                 if char in ('O', 'Q', 'D'): corrected += '0'
-                elif char in ('I', 'L', 'T'): corrected += '1'
+                elif char in ('I', 'L'): corrected += '1'
                 elif char == 'S': corrected += '5'
                 elif char == 'B': corrected += '8'
                 elif char == 'Z': corrected += '2'
@@ -1257,11 +1259,42 @@ def extract_and_correct_pan(text_lines):
             if re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', corrected):
                 return corrected
 
+    # 3. Remove all spaces and look for exact match (handles spaces inside PAN)
     text_no_space = re.sub(r'\s+', '', full_text)
     match = re.search(r'[A-Z]{5}[0-9]{4}[A-Z]', text_no_space)
     if match:
         return match.group(0)
 
+    # 4. Sliding window of 10 chars on text_no_space with OCR correction
+    text_no_space_clean = re.sub(r'[\s,.\-_:;]', '', full_text)
+    for i in range(len(text_no_space_clean) - 9):
+        window = text_no_space_clean[i:i+10]
+        if window.isalnum():
+            corrected = ''
+            for j, char in enumerate(window):
+                if j < 5:
+                    if char == '0': corrected += 'O'
+                    elif char == '1': corrected += 'I'
+                    elif char == '5': corrected += 'S'
+                    elif char == '8': corrected += 'B'
+                    else: corrected += char
+                elif j < 9:
+                    if char in ('O', 'Q', 'D'): corrected += '0'
+                    elif char in ('I', 'L'): corrected += '1'
+                    elif char == 'S': corrected += '5'
+                    elif char == 'B': corrected += '8'
+                    elif char == 'Z': corrected += '2'
+                    else: corrected += char
+                else:
+                    if char == '0': corrected += 'O'
+                    elif char == '1': corrected += 'I'
+                    elif char == '5': corrected += 'S'
+                    elif char == '8': corrected += 'B'
+                    else: corrected += char
+            if re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', corrected):
+                return corrected
+
+    # 5. Look for any 9-10 char word that is mostly letters/digits (fallback)
     for word in words:
         if 9 <= len(word) <= 10 and word.isalnum():
             letters = sum(c.isalpha() for c in word)
@@ -1269,6 +1302,7 @@ def extract_and_correct_pan(text_lines):
             if letters >= 3 and digits >= 2:
                 return word
 
+    # 6. Fallback for dummy images that don't have a valid PAN but have a string above Father's Name
     for i, line in enumerate(text_lines):
         if 'NAME' in line.upper():
             prev_lines = text_lines[max(0, i-4):i]
