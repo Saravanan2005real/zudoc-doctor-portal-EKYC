@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"net/http"
 	"time"
 
 	"doctor-service/entities"
@@ -118,9 +118,15 @@ func (s *DefaultVerificationPipelineService) ProcessVerificationJob(ctx context.
 	docCount := 0
 
 	for _, d := range docs {
-		// Dummy reader stream for OCR
-		reader := strings.NewReader("dummy file stream")
-		ocrRes, err := s.ocrProvider.Extract(ctx, &d, reader)
+		// Fetch the actual file from the storage URL
+		resp, err := http.Get(d.FileURL)
+		if err != nil {
+			continue // Skip if we can't fetch the file
+		}
+		
+		ocrRes, err := s.ocrProvider.Extract(ctx, &d, resp.Body)
+		resp.Body.Close()
+		
 		if err == nil {
 			docCount++
 			totalConfidence += ocrRes.Confidence

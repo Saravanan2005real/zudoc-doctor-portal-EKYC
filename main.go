@@ -110,7 +110,7 @@ func main() {
 	storageProv, _ := local.NewLocalStorageProvider("./uploads", "http://localhost:8080/uploads")
 	fileValidator := storage.NewFileValidator(10*1024*1024, 300)
 	virusScanner := storage.NewDefaultVirusScanner()
-	ocrProv := ocr.NewMockOCRProvider()
+	ocrProv := ocr.NewPythonOCRProvider("http://127.0.0.1:5001/api/v1/ocr")
 	councilProv := council.NewNMCRegistryAdapter()
 	notificationProv := notifications.NewMockNotificationProvider()
 	eventBus := events.NewMemoryEventBus()
