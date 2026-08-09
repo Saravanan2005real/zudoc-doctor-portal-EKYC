@@ -176,13 +176,13 @@ sequenceDiagram
 
 ---
 
-## 5. Verification pipeline detail
+## 5. Verification pipeline detail (Go Backend)
 
 ```mermaid
 flowchart TD
   Start([Job QUEUED]) --> MarkRun[Mark RUNNING]
   MarkRun --> Load[Load doctor, docs, licenses, quals]
-  Load --> OCR[OCR each document]
+  Load --> OCR[Call Python OCR Microservice]
   OCR --> PersistOCR[Persist DocumentOCRResult]
   PersistOCR --> Compare[Compare OCR vs declared fields]
   Compare --> Council[Council registry lookup]
@@ -197,7 +197,43 @@ flowchart TD
 
 ---
 
-## 6. Auth flow
+## 6. Python OCR & Face Matching Microservice (Step 1 & Step 2)
+
+```mermaid
+flowchart TD
+  subgraph Step1["Step 1: Document Upload"]
+    S1_Upload([Upload Aadhaar/PAN]) --> S1_Quality[Image Quality Check<br/>Blur, Brightness, Size]
+    S1_Quality --> S1_YOLO[YOLO/Contour Document Detection]
+    S1_YOLO --> S1_Warp[Perspective & Brightness Correction]
+    
+    S1_Warp --> S1_Face[RetinaFace<br/>Extract 112x112 Face]
+    S1_Warp --> S1_OCR[PaddleOCR<br/>Extract Text]
+    
+    S1_OCR --> S1_Parse[Regex Parsing<br/>Auto-detect PAN/Aadhaar]
+    S1_Parse --> S1_Valid[Format / Verhoeff Validation]
+  end
+
+  subgraph Step2["Step 2: Live Verification"]
+    S2_Cam([Live Webcam Capture]) --> S2_YOLO[YOLO/Contour Document Detection]
+    S2_YOLO --> S2_Warp[Perspective & Brightness Correction]
+    
+    S2_Warp --> S2_Face[RetinaFace<br/>Extract Live Face]
+    S2_Warp --> S2_OCR[PaddleOCR<br/>Extract Text]
+    
+    S2_OCR --> S2_Parse[Regex Parsing<br/>Auto-detect PAN/Aadhaar]
+    S2_Parse --> S2_Valid[Format / Verhoeff Validation]
+  end
+
+  subgraph DeepFace["Face Matching"]
+    S1_Face -.->|Saved Face Image| Match[DeepFace Verification]
+    S2_Face -.->|Live Face Image| Match
+    Match -->|Match / No Match| Result([Final Verification Result])
+  end
+```
+
+---
+
+## 7. Auth flow
 
 ```mermaid
 sequenceDiagram
