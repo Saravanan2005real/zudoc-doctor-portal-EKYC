@@ -1128,15 +1128,41 @@ def detect_and_warp_document(img_np):
     return img_np, False
 
 # Brightness Correction
-def correct_brightness(img_np):
-    # Apply CLAHE to L channel of LUV or LAB color space
+def enhance_image_for_ocr(img_np):
+    # 1. Super-Resolution (Level 2)
+    # Using OpenCV DNN Super Resolution with FSRCNN
+    try:
+        sr = cv2.dnn_superres.DnnSuperResImpl_create()
+        model_path = os.path.join(os.path.dirname(__file__), 'FSRCNN_x2.pb')
+        if os.path.exists(model_path):
+            sr.readModel(model_path)
+            sr.setModel("fsrcnn", 2)
+            img_np = sr.upsample(img_np)
+        else:
+            # Fallback to basic resize if model not found
+            height, width = img_np.shape[:2]
+            img_np = cv2.resize(img_np, (width * 2, height * 2), interpolation=cv2.INTER_CUBIC)
+    except Exception as e:
+        print(f"Super-resolution failed, falling back to basic resize: {e}")
+        height, width = img_np.shape[:2]
+        img_np = cv2.resize(img_np, (width * 2, height * 2), interpolation=cv2.INTER_CUBIC)
+
+    # 2. Brightness & Contrast Enhancement (CLAHE)
     lab = cv2.cvtColor(img_np, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     cl = clahe.apply(l)
     limg = cv2.merge((cl, a, b))
     enhanced = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
-    return enhanced
+
+    # 3. Noise Removal (Fast Non-local Means Denoising)
+    denoised = cv2.fastNlMeansDenoisingColored(enhanced, None, 10, 10, 7, 21)
+
+    # 4. Sharpening (Unsharp Masking)
+    gaussian = cv2.GaussianBlur(denoised, (9, 9), 10.0)
+    sharpened = cv2.addWeighted(denoised, 1.5, gaussian, -0.5, 0)
+
+    return sharpened
 
 # Face Extraction & Alignment using RetinaFace
 def extract_and_align_face(img_np):
@@ -1359,23 +1385,48 @@ def parse_pan_text(text_lines):
     name = ""
     father_name = ""
     lines = [l.strip() for l in text_lines if l.strip()]
-    skip_pattern = re.compile(r'(?i)(income\s*tax|govt|government|india|permanent\s*account|signature|date\s*of\s*birth|department|card)')
-    name_candidates = []
-    for line in lines:
-        if skip_pattern.search(line):
-            continue
-        if extract_and_correct_pan([line]):
-            continue
-        if re.search(r'\d{2}[/\-]\d{2}[/\-]\d{4}', line):
-            continue
-        words = line.split()
-        if len(words) >= 2 and all(w.replace('.', '').isalpha() for w in words):
-            name_candidates.append(line)
-
-    if len(name_candidates) >= 1:
-        name = name_candidates[0]
-    if len(name_candidates) >= 2:
-        father_name = name_candidates[1]
+    
+    # Find the line containing "Father"
+    father_idx = -1
+    for i, line in enumerate(lines):
+        if re.search(r'(?i)father', line):
+            father_idx = i
+            break
+            
+    if father_idx != -1:
+        # Father's name is usually the line immediately below
+        if father_idx + 1 < len(lines):
+            potential_father = lines[father_idx + 1]
+            if not re.search(r'(?i)(date|birth|signature|\d)', potential_father):
+                father_name = potential_father
+                
+        # Name is usually the line immediately above "Father's Name"
+        if father_idx - 1 >= 0:
+            potential_name = lines[father_idx - 1]
+            if not re.search(r'(?i)(name|tax|govt|india|department)', potential_name):
+                name = potential_name
+            elif father_idx - 2 >= 0:
+                potential_name = lines[father_idx - 2]
+                if not re.search(r'(?i)(name|tax|govt|india|department)', potential_name):
+                    name = potential_name
+    else:
+        # Fallback if "Father" keyword not found
+        skip_pattern = re.compile(r'(?i)(income\s*tax|govt|government|india|permanent\s*account|signature|date\s*of\s*birth|department|card|name)')
+        name_candidates = []
+        for line in lines:
+            if skip_pattern.search(line):
+                continue
+            if extract_and_correct_pan([line]):
+                continue
+            if re.search(r'\d{2}[/\-]\d{2}[/\-]\d{4}', line):
+                continue
+            words = line.split()
+            if len(words) >= 1 and all(w.replace('.', '').isalpha() for w in words):
+                name_candidates.append(line)
+        if len(name_candidates) >= 1:
+            name = name_candidates[0]
+        if len(name_candidates) >= 2:
+            father_name = name_candidates[1]
 
     return {
         "document_type": "PAN",
@@ -1433,7 +1484,7 @@ def live_verify_api():
 
         # 2. Document Detection & Warp
         doc_img, warped_ok = detect_and_warp_document(img)
-        doc_img = correct_brightness(doc_img)
+        doc_img = enhance_image_for_ocr(doc_img)
 
         doc_filename = f"live_doc_{filename_id}.jpg"
         doc_path = os.path.join(app.config['UPLOAD_FOLDER'], doc_filename)
@@ -1509,7 +1560,7 @@ def run_ocr():
         processed_img, warped_ok = detect_and_warp_document(img)
 
         # Step 3: Brightness Correction
-        processed_img = correct_brightness(processed_img)
+        processed_img = enhance_image_for_ocr(processed_img)
 
         # Step 3.5: Extract Face using RetinaFace
         face_img = extract_and_align_face(processed_img)
