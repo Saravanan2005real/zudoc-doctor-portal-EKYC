@@ -9,7 +9,7 @@ Goals:
 1. **Trust** — multi-signal verification (documents, OCR, council registry, fraud rules, human admin).
 2. **Safety** — only verified doctors unlock sensitive actions.
 3. **Operability** — async jobs, DLQ, health/metrics, container + K8s deployment.
-4. **Developer velocity** — layered Go architecture, provider interfaces, SQLite fallback for local demos.
+4. **Developer velocity** — layered Python FastAPI architecture, provider interfaces, local OCR microservice.
 
 ---
 
@@ -19,18 +19,19 @@ Goals:
 Doctor / Admin UI (public/)
         │
         ▼
-   HTTP API (main.go + controllers)
+   HTTP API (python_backend/main.py + controllers)
         │
    ┌────┴────┐
    │ Services│  ← auth, profile, documents, submission, admin review, analytics
    └────┬────┘
         │
-   Repositories (GORM) ──► PostgreSQL | SQLite
+   Repositories (SQLAlchemy) ──► PostgreSQL
         │
    On submit ──► VerificationJob (QUEUED)
         │
-   Background Worker ──► Verification Pipeline
-                              │
+   OCR microservice (ocr_service/) ──► PaddleOCR / RetinaFace / face match
+        │
+   Verification Pipeline
               OCR → Compare → Council → Fraud → Decision
                               │
                          Admin review / Approve|Reject
@@ -55,7 +56,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full diagrams.
 | `OTPVerification` / `RefreshToken` | Auth lifecycle |
 | `Prescription` | Post-verification clinical artifact |
 
-Schema evolves via `migrations/*.sql` plus GORM `AutoMigrate` at startup for local/dev convenience.
+Schema evolves via `migrations/*.sql` plus SQLAlchemy `Base.metadata.create_all` at startup for local/dev convenience.
 
 ---
 
@@ -63,10 +64,10 @@ Schema evolves via `migrations/*.sql` plus GORM `AutoMigrate` at startup for loc
 
 | Layer | Packages | Responsibility |
 |-------|----------|----------------|
-| Transport | `controllers/`, `main.go` | HTTP routing, rate limits, guards |
-| Application | `services/` | Use-cases, orchestration, pipeline |
-| Domain | `entities/`, `verification/*`, `auth/*` | Models, rules, engines |
-| Infrastructure | `repositories/`, `storage/`, `sms/`, `ocr/`, `events/`, `notifications/` | IO adapters behind interfaces |
+| Transport | `python_backend/controllers/`, `main.py` | HTTP routing, rate limits, guards |
+| Application | `python_backend/services/` | Use-cases, orchestration, pipeline |
+| Domain | `python_backend/entities/`, `verification/*`, `security/*` | Models, rules, engines |
+| Infrastructure | `repositories/`, `storage/`, `sms/`, `ocr/`, `ocr_service/` | IO adapters + OCR microservice |
 
 **Why this shape:** keeps business rules testable without HTTP/DB, and allows swapping providers (mock OCR ↔ Azure/Google, local storage ↔ S3/Cloudinary, mock SMS ↔ MSG91/Twilio).
 
@@ -141,7 +142,7 @@ Documents are never trusted as-is: validator + scanner run before persistence.
 - **Doctor wizard** — multi-step registration → credentials → documents → submit
 - **Admin portal** — queue/search, detail review, actions
 
-The Go server serves static assets from `/` so one process demos the full loop.
+The FastAPI server serves static assets from `/` so one process demos the full loop.
 
 ---
 
@@ -149,21 +150,21 @@ The Go server serves static assets from `/` so one process demos the full loop.
 
 | Mode | Notes |
 |------|--------|
-| Local binary | SQLite if Postgres unavailable |
-| Compose | App + Postgres + Redis + RabbitMQ + Nginx |
+| Local Python | FastAPI + OCR service + PostgreSQL |
+| Compose | App + OCR + Postgres + Redis + RabbitMQ + Nginx |
 | Kubernetes | 3-replica Deployment, Ingress, ConfigMap/Secret, HPA |
 
-CI (GitHub Actions): `go vet`, `go test`, Docker image build on `main`.
+CI (GitHub Actions): Python compile checks, Docker image build on `main`/`master`.
 
 ---
 
 ## 12. Extensibility guidelines
 
-1. Add new verification signals as packages under `verification/` and inject into the pipeline service.
-2. Prefer new repository methods over leaking GORM into controllers.
+1. Add new verification signals as packages under `python_backend/verification/` and inject into the pipeline service.
+2. Prefer new repository methods over leaking SQLAlchemy sessions into controllers.
 3. Keep provider interfaces (OCR, SMS, storage, council, notifications) so mocks stay first-class in tests.
 4. Evolve API contract in `docs/openapi.yaml` alongside handlers.
-5. Prefer migration files for production schema changes; treat AutoMigrate as convenience, not the sole source of truth.
+5. Prefer migration files for production schema changes; treat `create_all` as convenience, not the sole source of truth.
 
 ---
 

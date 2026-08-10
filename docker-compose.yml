@@ -17,10 +17,21 @@ services:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
       - JWT_SECRET=production-jwt-secret-key-doctor-verification-portal
       - SMS_PROVIDER=MOCK
+      - PORT=8080
     depends_on:
       - postgres
       - redis
       - rabbitmq
+      - ocr-service
+
+  ocr-service:
+    build:
+      context: ./ocr_service
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./ocr_service/ocr_uploads:/app/ocr_uploads
 
   postgres:
     image: postgres:15-alpine

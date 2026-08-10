@@ -4,7 +4,6 @@
 *.dll
 *.so
 *.dylib
-doctor-service
 /bin/
 /dist/
 
@@ -14,7 +13,20 @@ doctor-service
 *.sqlite
 *.sqlite3
 uploads/
+python_backend/uploads/
+ocr_service/ocr_uploads/
 *.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
 
 # IDE / OS
 .idea/
@@ -25,16 +37,11 @@ uploads/
 Thumbs.db
 
 # Env & secrets
-.env
-.env.*
-!.env.example
 *.pem
 *.key
 
 # Test / coverage
 coverage.out
 coverage.html
-*.test
-
-# Go
-vendor/
+.pytest_cache/
+.mypy_cache/

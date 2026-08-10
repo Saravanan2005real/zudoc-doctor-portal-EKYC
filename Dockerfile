@@ -1,29 +1,24 @@
-# Build Stage
-FROM golang:1.22-alpine AS builder
+# Python FastAPI backend
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Copy dependency files
-COPY go.mod go.sum ./
-RUN go mod download
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Copy source code
-COPY . .
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Build binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o doctor-service .
+COPY python_backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt Pillow
 
-# Final Lightweight Stage
-FROM alpine:3.19
+COPY python_backend/ ./
+COPY public ./public
+COPY migrations ./migrations
 
-RUN apk --no-cache add ca-certificates tzdata
-
-WORKDIR /root/
-
-COPY --from=builder /app/doctor-service .
-COPY --from=builder /app/migrations ./migrations
-COPY --from=builder /app/public ./public
+RUN mkdir -p uploads
 
 EXPOSE 8080
 
-CMD ["./doctor-service"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
