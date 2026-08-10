@@ -1,8 +1,10 @@
-# Architecture Diagrams — Doctor eKYC Service
+# Architecture — ZuDoc Doctor eKYC Portal
 
-This document describes the **system context**, **runtime components**, **verification pipeline**, and **deployment** views of the Zudoc Doctor Portal eKYC service.
+This document is the **source of truth** for system diagrams. It matches the **Python** runtime: FastAPI portal backend + Flask OCR microservice + PostgreSQL.
 
-> Diagrams use [Mermaid](https://mermaid.js.org/). They render on GitHub and in most Markdown previewers.
+> Diagrams use [Mermaid](https://mermaid.js.org/) and render on GitHub.
+
+For a shorter overview and setup guide, see the root [`README.md`](../README.md).
 
 ---
 
@@ -13,227 +15,284 @@ flowchart LR
   Doctor[Doctor]
   Admin[Admin Reviewer]
   Portal[MedTrust Web Portal<br/>public/]
-  API[Doctor Verification Service<br/>Go HTTP API]
-  PG[(PostgreSQL / SQLite)]
-  OCR[OCR Provider<br/>Mock / Azure / Google]
-  Council[Medical Council<br/>NMC Adapter]
+  API[FastAPI<br/>python_backend]
+  PG[(PostgreSQL)]
+  OCR[Flask OCR Microservice<br/>ocr_service :5001]
   SMS[SMS Provider<br/>Mock / MSG91 / Twilio]
   Store[Object Storage<br/>Local / S3 / Cloudinary]
-  MQ[[RabbitMQ / Event Bus]]
-  Redis[(Redis)]
 
   Doctor --> Portal
   Admin --> Portal
   Portal --> API
   API --> PG
-  API --> OCR
-  API --> Council
+  API -->|POST /api/v1/ocr| OCR
   API --> SMS
   API --> Store
-  API --> MQ
-  API --> Redis
 ```
+
+**What is real today for the doctor wizard**
+
+- Auth, credentials, documents, submit, **synchronous `evaluate-ekyc`**, UI Step 5
+- OCR microservice for Aadhaar/PAN parse + RetinaFace face crop
+
+**Designed / partial**
+
+- Async `VerificationJob` worker (council → fraud → decision)
+- Full admin review service wiring (UI exists; many admin routes are stubs)
+- Redis / RabbitMQ in Compose for a production-shaped topology
 
 ---
 
-## 2. Runtime component view
+## 2. Runtime topology
 
 ```mermaid
 flowchart TB
-  subgraph Edge["Edge"]
-    Nginx[Nginx Reverse Proxy]
+  subgraph Browser
+    UI[public/ MedTrust UI]
   end
 
-  subgraph App["doctor-service process"]
-    Mux[HTTP ServeMux]
-    RL[Rate Limiter]
-    Controllers[Controllers]
-    Services[Services]
-    Worker[Verification Worker]
-    Pipeline[Verification Pipeline]
-    Repos[Repositories]
-    Metrics[Health + Metrics]
+  subgraph ComposeEdge["Compose only"]
+    NGX[Nginx :80]
   end
 
-  subgraph Data["Data plane"]
-    DB[(DB)]
-    Uploads[File Storage]
+  subgraph FastAPI["python_backend"]
+    HTTP[Uvicorn / FastAPI<br/>:8000 local · :8080 Docker]
+    CTRL[Controllers]
+    SVC[Services]
+    REPO[Repositories]
+    UP[uploads/]
   end
 
-  subgraph Engines["Verification engines"]
-    OCREng[OCR]
-    Comp[Comparator]
-    Coun[Council]
-    Fraud[Fraud Detector]
-    Dec[Decision Engine]
+  subgraph FlaskOCR["ocr_service"]
+    OHTTP[Flask :5001]
+    OPIPE[Quality · Warp · SR · Face · OCR · Parse]
+    OU[ocr_uploads/]
   end
 
-  Nginx --> Mux
-  Mux --> RL --> Controllers
-  Controllers --> Services
-  Services --> Repos --> DB
-  Services --> Uploads
-  Services -->|enqueue job| DB
-  Worker -->|poll QUEUED| Repos
-  Worker --> Pipeline
-  Pipeline --> OCREng
-  Pipeline --> Comp
-  Pipeline --> Coun
-  Pipeline --> Fraud
-  Pipeline --> Dec
-  Mux --> Metrics
+  DB[(PostgreSQL)]
+
+  UI --> NGX
+  NGX --> HTTP
+  UI -->|local direct| HTTP
+  HTTP --> CTRL --> SVC
+  SVC --> REPO --> DB
+  SVC --> UP
+  SVC --> OHTTP
+  OHTTP --> OPIPE --> OU
 ```
+
+| Process | Default local | Compose |
+|---------|---------------|---------|
+| Portal + API | `127.0.0.1:8000` | `:8080` (+ Nginx `:80`) |
+| OCR | `127.0.0.1:5001` | `:5001` |
+| Postgres | `:5433` (common local) | `:5432` |
+
+Health:
+
+- API: `GET /health/live`, `GET /health/ready`, `GET /metrics`
+- OCR: `GET /` (also used as readiness probe by evaluate-ekyc)
 
 ---
 
-## 3. Package / layered architecture
+## 3. Layered backend packages
 
 ```mermaid
 flowchart TB
   subgraph Presentation
-    C[controllers]
     P[public UI]
-    O[observability]
+    C[controllers]
   end
 
   subgraph Application
     S[services]
-    W[worker]
+    EKYC[ekyc_evaluation_service]
   end
 
   subgraph Domain
     E[entities]
     V[verification/*]
-    A[auth/*]
-    Sec[security]
-    Rx[prescriptions]
+    SEC[security]
   end
 
   subgraph Infrastructure
     R[repositories]
-    St[storage]
+    ST[storage]
     SMS[sms]
-    OCR[ocr]
-    Ev[events]
-    N[notifications]
-    Cfg[config]
+    HTTP_OCR[HTTP client → ocr_service]
   end
 
   P --> C
   C --> S
-  C --> Sec
+  C --> EKYC
   S --> R
-  S --> V
-  S --> A
-  S --> St
+  S --> ST
   S --> SMS
-  S --> N
-  W --> S
-  V --> OCR
+  EKYC --> HTTP_OCR
+  EKYC --> R
   R --> E
+  V -.->|designed async path| S
 ```
 
 ---
 
-## 4. Doctor verification sequence
+## 4. Doctor wizard sequence (live path)
 
 ```mermaid
 sequenceDiagram
   actor D as Doctor
-  participant UI as Portal
-  participant API as HTTP API
-  participant S as SubmissionService
-  participant DB as Database
-  participant W as Worker
-  participant PL as Pipeline
-  actor AD as Admin
+  participant UI as Portal public/
+  participant API as FastAPI
+  participant DB as PostgreSQL
+  participant OCR as Flask OCR :5001
 
-  D->>UI: Register / OTP / Login
-  UI->>API: Auth endpoints
-  API->>DB: Persist doctor + tokens
+  D->>UI: Step 1 Register
+  UI->>API: POST /api/v1/doctors/register
+  API->>DB: Doctor + OTP hash
+  API-->>UI: public_id (OTP printed in API logs)
 
-  D->>UI: Upload docs + profile data
-  UI->>API: Documents / licenses / quals
-  API->>DB: Store metadata + files
+  D->>UI: Enter OTP
+  UI->>API: POST /api/v1/doctors/verify-otp
+  API->>DB: mobile_verified + tokens
+  API-->>UI: JWT + refresh
+
+  D->>UI: Step 2 credentials
+  UI->>API: POST licenses / qualifications / clinics
+  API->>DB: Persist credential rows
+
+  D->>UI: Step 3 upload docs
+  UI->>API: POST /api/v1/doctors/documents
+  API->>DB: DoctorDocument metadata
+  API-->>UI: file_url under /uploads/...
 
   D->>UI: Submit verification
-  UI->>API: POST /submit-verification
-  API->>S: Checklist validate
-  S->>DB: Insert VerificationJob QUEUED
+  UI->>API: POST /api/v1/doctors/submit-verification
+  API->>DB: status PENDING + history (+ optional VerificationJob)
 
-  loop Poll every ~2s
-    W->>DB: FetchNextQueuedJob
-    W->>PL: ProcessVerificationJob
-    PL->>PL: OCR → Compare → Council → Fraud → Decision
-    PL->>DB: OCR results + history + job status
+  UI->>API: POST /api/v1/doctors/evaluate-ekyc
+  API->>OCR: GET / health
+  loop Each KYC document
+    API->>OCR: POST /api/v1/ocr multipart
+    OCR-->>API: parsed_fields + face_image_url + confidence
   end
+  API->>API: ID check · face presence · name score · decision
+  API->>DB: status AUTO_VERIFIED / MANUAL_REVIEW / REJECTED
+  API-->>UI: stages[] + decision + OCR cards
 
-  AD->>UI: Open admin review
-  UI->>API: Get verification detail
-  AD->>API: Approve / Reject / Request docs
-  API->>DB: Status + admin actions + notes
+  alt not FAILED
+    UI->>UI: Unlock Step 5 prescription studio
+  else FAILED
+    UI->>UI: Block — re-run / fix documents
+  end
 ```
 
 ---
 
-## 5. Verification pipeline detail (Go Backend)
+## 5. Step 4 evaluate-ekyc — decision pipeline
+
+Entry: `POST /api/v1/doctors/evaluate-ekyc`  
+Service: `python_backend/services/ekyc_evaluation_service.py`
 
 ```mermaid
 flowchart TD
-  Start([Job QUEUED]) --> MarkRun[Mark RUNNING]
-  MarkRun --> Load[Load doctor, docs, licenses, quals]
-  Load --> OCR[Call Python OCR Microservice]
-  OCR --> PersistOCR[Persist DocumentOCRResult]
-  PersistOCR --> Compare[Compare OCR vs declared fields]
-  Compare --> Council[Council registry lookup]
-  Council --> Fraud[Fraud rule evaluation]
-  Fraud --> Decide[Decision engine]
-  Decide --> History[Write VerificationHistory]
-  History --> Done{Success?}
-  Done -->|yes| Complete[Mark COMPLETED]
-  Done -->|no| Fail[Mark FAILED]
-  Fail --> DLQ[Optional DLQ + admin retry]
+  Start([evaluate-ekyc]) --> Load[Load doctor by X-Doctor-Public-ID]
+  Load --> Health{OCR GET / OK?}
+  Health -->|no| MR_OCR[MANUAL_REVIEW<br/>OCR unreachable]
+  Health -->|yes| Pick[Prefer AADHAAR/PAN/PASSPORT<br/>else first 2 docs]
+  Pick --> Empty{Any docs?}
+  Empty -->|no| FailEmpty[FAILED]
+  Empty -->|yes| RunOCR[POST /api/v1/ocr per document]
+  RunOCR --> AnyOK{≥1 success?}
+  AnyOK -->|no| MR_or_Fail[MANUAL_REVIEW if errors<br/>else FAILED]
+  AnyOK -->|yes| S3[Stage 3<br/>id_validated + face_detected + best_conf]
+  S3 --> S4[Stage 4<br/>name Jaccard vs profile]
+  S4 --> Rules{Decision}
+
+  Rules -->|id_validated OR<br/>face && conf≥40 OR<br/>conf≥60| AV[AUTO_VERIFIED<br/>prescription_enabled=true<br/>fraud_score=0]
+  Rules -->|weak / soft reasons| MR[MANUAL_REVIEW<br/>prescription_enabled=false<br/>fraud_score=30]
+  Rules -->|hard empty path| RJ[REJECTED / FAILED<br/>fraud_score=80]
+
+  AV --> Hist[VerificationHistory EKYC_EVALUATION]
+  MR --> Hist
+  RJ --> Hist
+  MR_OCR --> Hist
+  MR_or_Fail --> Hist
+  FailEmpty --> Hist
 ```
+
+### Soft reasons that push messaging toward MANUAL_REVIEW
+
+- KYC present but ID number not validated
+- KYC present but no face crop
+- OCR name present and name similarity &lt; 40%
+
+### UI vs backend unlock
+
+| Decision | Backend `prescription_enabled` | Portal Step 5 button |
+|----------|--------------------------------|----------------------|
+| AUTO_VERIFIED | true | shown |
+| MANUAL_REVIEW | false | shown (demo continuity) |
+| FAILED | false | hidden |
 
 ---
 
-## 6. Python OCR & Face Matching Microservice (Step 1 & Step 2)
+## 6. OCR microservice internal pipeline
+
+File: `ocr_service/app.py` — `POST /api/v1/ocr`
 
 ```mermaid
 flowchart TD
-  subgraph Step1["Step 1: Document Upload"]
-    S1_Upload([Upload Aadhaar/PAN]) --> S1_Quality[Image Quality Check<br/>Blur, Brightness, Size]
-    S1_Quality --> S1_YOLO[YOLO/Contour Document Detection]
-    S1_YOLO --> S1_Warp[Perspective & Brightness Correction]
-    
-    S1_Warp --> S1_Face[RetinaFace<br/>Extract 112x112 Face]
-    S1_Warp --> S1_OCR[PaddleOCR<br/>Extract Text]
-    
-    S1_OCR --> S1_Parse[Regex Parsing<br/>Auto-detect PAN/Aadhaar]
-    S1_Parse --> S1_Valid[Format / Verhoeff Validation]
-  end
-
-  subgraph Step2["Step 2: Live Verification"]
-    S2_Cam([Live Webcam Capture]) --> S2_YOLO[YOLO/Contour Document Detection]
-    S2_YOLO --> S2_Warp[Perspective & Brightness Correction]
-    
-    S2_Warp --> S2_Face[RetinaFace<br/>Extract Live Face]
-    S2_Warp --> S2_OCR[PaddleOCR<br/>Extract Text]
-    
-    S2_OCR --> S2_Parse[Regex Parsing<br/>Auto-detect PAN/Aadhaar]
-    S2_Parse --> S2_Valid[Format / Verhoeff Validation]
-  end
-
-  subgraph DeepFace["Face Matching"]
-    S1_Face -.->|Saved Face Image| Match[DeepFace Verification]
-    S2_Face -.->|Live Face Image| Match
-    Match -->|Match / No Match| Result([Final Verification Result])
-  end
+  In([multipart image]) --> Save[Save to ocr_uploads/]
+  Save --> Q[check_image_quality<br/>size · aspect · blur · brightness · Haar hints]
+  Q --> Det[detect_and_warp_document<br/>YOLO optional + contour perspective]
+  Det --> Enh[enhance_image_for_ocr<br/>FSRCNN_x2 · CLAHE · denoise · sharpen]
+  Enh --> Face[extract_and_align_face<br/>RetinaFace → 112×112]
+  Enh --> OCR[PaddleOCR → lines + avg confidence]
+  OCR --> Parse[parse_id_document<br/>Aadhaar Verhoeff / PAN format]
+  Parse --> Out([JSON status=success<br/>parsed_fields · face_image_url · processed_image_url])
+  Face --> Out
 ```
+
+### Optional live path (OCR demo UI only)
+
+```mermaid
+flowchart LR
+  Cam[Webcam frame] --> Live["POST /api/v1/live_verify"]
+  Live --> Same[Same OCR + face crop chain]
+  Same --> DF[DeepFace verify vs step1 face]
+  DF --> Res[face_match boolean + OCR fields]
+```
+
+Portal Step 4 does **not** call DeepFace. It only consumes `/api/v1/ocr`.
 
 ---
 
-## 7. Auth flow
+## 7. Document upload flow
+
+```mermaid
+sequenceDiagram
+  participant UI as Portal
+  participant API as DocumentController
+  participant S as DocumentService
+  participant V as Validator / Scanner
+  participant FS as Local storage
+  participant DB as DB
+
+  UI->>API: POST /documents + X-Doctor-Public-ID
+  API->>S: Upload
+  S->>V: size / type / extension
+  S->>V: SHA-256 hash + virus-scan hook
+  S->>DB: reject duplicate hash for doctor
+  S->>DB: version bump · previous not latest
+  S->>FS: uploads/doctors/{public_id}/documents/{uuid}.ext
+  S->>DB: DoctorDocument ocr_status=PENDING
+  API-->>UI: document_id + file_url + file_hash
+```
+
+Supported types include: `REGISTRATION_CERTIFICATE`, medical degree variants, `AADHAAR`, `PAN`, `PASSPORT`.
+
+---
+
+## 8. Auth flow
 
 ```mermaid
 sequenceDiagram
@@ -244,43 +303,66 @@ sequenceDiagram
   participant DB as DB
 
   C->>API: POST /register
-  API->>AS: Create doctor + hash password
-  AS->>DB: Save doctor
-  AS->>SMS: Send OTP
-  AS->>DB: Store OTPVerification
+  API->>AS: create doctor + hash password
+  AS->>DB: save Doctor NOT_SUBMITTED
+  AS->>SMS: send OTP (mock → console)
+  AS->>DB: otp_verifications
 
   C->>API: POST /verify-otp
-  API->>AS: Validate OTP
-  AS->>DB: Mark verified
-  AS-->>C: Access JWT + Refresh token
+  API->>AS: validate OTP purpose=REGISTER
+  AS->>DB: mobile_verified + refresh_token
+  AS-->>C: access JWT + refresh + doctor
 
   C->>API: POST /login
-  API->>AS: Check credentials / lockout
-  AS-->>C: Tokens
+  API->>AS: credentials + lockout checks
+  AS-->>C: tokens + profile
 ```
 
 ---
 
-## 7. Deployment (Compose / K8s)
+## 9. Designed async job pipeline (secondary)
+
+Submit may insert `VerificationJob` with status `QUEUED` and type `FULL_PIPELINE`.
+
+```mermaid
+flowchart TD
+  Q([QUEUED]) --> Run[Mark RUNNING]
+  Run --> Load[Load doctor + docs + licenses]
+  Load --> OCR[OCR provider]
+  OCR --> Comp[Compare OCR vs declared fields]
+  Comp --> Council[Council / NMC adapter]
+  Council --> Fraud[Fraud rules]
+  Fraud --> Dec[Decision engine]
+  Dec --> Hist[History + job COMPLETED]
+  Dec -->|persistent failure| DLQ[verification_dead_jobs]
+```
+
+This path is **not** what Step 4 waits on. Day-to-day demos use synchronous `evaluate-ekyc`.
+
+---
+
+## 10. Deployment views
 
 ```mermaid
 flowchart LR
   subgraph Compose["docker-compose"]
     NGX[nginx :80]
     APP[doctor-service :8080]
-    PG[(postgres)]
+    OCR[ocr-service :5001]
+    PG[(postgres :5432)]
     RD[(redis)]
     RMQ[rabbitmq]
     NGX --> APP
     APP --> PG
+    APP --> OCR
     APP --> RD
     APP --> RMQ
   end
 
-  subgraph K8s["Kubernetes"]
+  subgraph K8s["Kubernetes k8s/"]
     Ing[Ingress]
     Svc[Service]
-    Dep[Deployment x3 + HPA]
+    Dep[Deployment ×3 + HPA]
     CM[ConfigMap]
     Sec[Secret]
     Ing --> Svc --> Dep
@@ -291,12 +373,26 @@ flowchart LR
 
 ---
 
-## 8. Trust boundary summary
+## 11. Trust boundaries
 
 | Boundary | Control |
 |----------|---------|
-| Public internet → API | Nginx, rate limits, JWT |
-| Untrusted uploads → storage | Validator, scanner, size caps |
-| Doctor → prescriptions | Verified-status guard |
-| Pipeline → external council/OCR | Provider interfaces + timeouts/errors → job fail/DLQ |
-| Admin actions → doctor status | Explicit admin APIs + action audit trail |
+| Browser → API | Optional Nginx; route rate limits; JWT on auth paths |
+| Uploads → disk | Type/size validation, content hash, scanner hook |
+| API → OCR | HTTP timeouts (evaluate uses long OCR timeout); health check first |
+| Doctor → prescriptions | `prescription_enabled` / verified-status intent (`PrescriptionAuthGuard`) |
+| Admin → status changes | Explicit admin APIs + action audit (when fully wired) |
+
+---
+
+## 12. Related files
+
+| Concern | Path |
+|---------|------|
+| API entry | `python_backend/main.py` |
+| Step 4 evaluate | `python_backend/services/ekyc_evaluation_service.py` |
+| Evaluate route | `python_backend/controllers/evaluation_controller.py` |
+| OCR service | `ocr_service/app.py` |
+| Portal wizard | `public/app.js` |
+| Schema | `migrations/*.sql` |
+| OpenAPI | `docs/openapi.yaml` |
