@@ -1,6 +1,6 @@
-# Architecture — ZuDoc Doctor eKYC Portal
+# Architecture — ZuDoc Doctor eKYC Portal + Eye Tracking
 
-This document is the **source of truth** for system diagrams. It matches the **Python** runtime: FastAPI portal backend + Flask OCR microservice + PostgreSQL.
+This document is the **source of truth** for system diagrams. It matches the **Python** runtime: FastAPI portal backend + Flask OCR microservice + PostgreSQL + FGI-Net eye-tracking module.
 
 > Diagrams use [Mermaid](https://mermaid.js.org/) and render on GitHub.
 
@@ -18,6 +18,8 @@ flowchart LR
   API[FastAPI<br/>python_backend]
   PG[(PostgreSQL)]
   OCR[Flask OCR Microservice<br/>ocr_service :5001]
+  Eye[Eye Tracking Module<br/>eye tracking/ FGI-Net]
+  Cam[Webcam]
   SMS[SMS Provider<br/>Mock / MSG91 / Twilio]
   Store[Object Storage<br/>Local / S3 / Cloudinary]
 
@@ -28,17 +30,24 @@ flowchart LR
   API -->|POST /api/v1/ocr| OCR
   API --> SMS
   API --> Store
+  Cam --> Eye
 ```
 
 **What is real today for the doctor wizard**
 
 - Auth, credentials, documents, submit, **synchronous `evaluate-ekyc`**, UI Step 5
-- OCR microservice for Aadhaar/PAN parse + RetinaFace face crop
+- OCR microservice for Aadhaar/PAN parse + RetinaFace face crop (OCR-safe enhance + UID ROI)
+
+**Eye tracking (standalone demo today)**
+
+- MediaPipe iris + both-eyes facing gate + (x,y) plot + direction classifier
+- FGI-Net loaded for optional pitch/yaw refine when real weights are present
 
 **Designed / partial**
 
 - Async `VerificationJob` worker (council → fraud → decision)
 - Full admin review service wiring (UI exists; many admin routes are stubs)
+- Wiring eye-tracking signals into portal Step 4 / liveness
 - Redis / RabbitMQ in Compose for a production-shaped topology
 
 ---
@@ -382,10 +391,41 @@ flowchart LR
 | API → OCR | HTTP timeouts (evaluate uses long OCR timeout); health check first |
 | Doctor → prescriptions | `prescription_enabled` / verified-status intent (`PrescriptionAuthGuard`) |
 | Admin → status changes | Explicit admin APIs + action audit (when fully wired) |
+| Webcam → eye tracker | Local process only; both-eyes facing gate before plotting |
 
 ---
 
-## 12. Related files
+## 12. Eye tracking module (FGI-Net)
+
+Standalone package under `eye tracking/`. Not yet wired into portal Step 4; intended as a liveness / attention signal.
+
+```mermaid
+flowchart TD
+  Frame([Webcam BGR frame]) --> MP[MediaPipe Face Mesh + iris]
+  MP --> Gate{Both eyes open<br/>and facing camera?}
+  Gate -->|no| Wait[direction = turn_to_camera / no_face<br/>graph paused]
+  Gate -->|yes| Raw[Raw pupil x,y per eye]
+  Raw --> Cal[CenterCalibrator<br/>subtract resting bias]
+  Cal --> Dir[classify_direction<br/>top/bottom/left/right/center]
+  Cal --> Plot[EyeXYGraph trails]
+  Gate -->|yes| Crop[Face crop 224×224]
+  Crop --> FGI[FGI-Net → pitch,yaw]
+  FGI -.->|optional with real weights| Dir
+```
+
+| Piece | Role |
+|-------|------|
+| `FaceEyeEngine` | Detect face anywhere; require both eyes facing |
+| `CenterCalibrator` | Auto-lock resting gaze so plot center ≈ (0,0) |
+| `EyeXYGraph` | Live Cartesian plot for left/right pupils |
+| `FGI_Net` | Lightweight appearance gaze head (~1.5M params) |
+| `demo.py` | Side-by-side camera + graph UI |
+
+Run: `cd "eye tracking" && .\.venv\Scripts\activate && python demo.py`
+
+---
+
+## 13. Related files
 
 | Concern | Path |
 |---------|------|
@@ -394,5 +434,7 @@ flowchart LR
 | Evaluate route | `python_backend/controllers/evaluation_controller.py` |
 | OCR service | `ocr_service/app.py` |
 | Portal wizard | `public/app.js` |
+| Eye tracker | `eye tracking/fgi_eye_tracker/tracker.py` |
+| Eye demo | `eye tracking/demo.py` |
 | Schema | `migrations/*.sql` |
 | OpenAPI | `docs/openapi.yaml` |

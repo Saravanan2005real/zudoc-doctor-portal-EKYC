@@ -1127,42 +1127,79 @@ def detect_and_warp_document(img_np):
     
     return img_np, False
 
-# Brightness Correction
-def enhance_image_for_ocr(img_np):
-    # 1. Super-Resolution (Level 2)
-    # Using OpenCV DNN Super Resolution with FSRCNN
+def _apply_clahe(img_np, clip_limit=2.0):
+    """Mild LAB CLAHE — strong enough for shadows, gentle enough for PaddleOCR."""
+    lab = cv2.cvtColor(img_np, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+    cl = clahe.apply(l)
+    limg = cv2.merge((cl, a, b))
+    return cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+
+
+def _maybe_upscale_for_ocr(img_np):
+    """Upscale only small/soft images. Aggressive FSRCNN on sharp scans hurts Latin OCR."""
+    h, w = img_np.shape[:2]
+    min_side = min(h, w)
+    gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
+    blur_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    # Already high-res and sharp — leave geometry alone
+    if min_side >= 900 and blur_var >= 80:
+        return img_np
+
+    need_sr = min_side < 700 or blur_var < 60
+    if not need_sr:
+        if min_side < 1000:
+            scale = 1.5
+            return cv2.resize(
+                img_np,
+                (int(w * scale), int(h * scale)),
+                interpolation=cv2.INTER_CUBIC,
+            )
+        return img_np
+
     try:
         sr = cv2.dnn_superres.DnnSuperResImpl_create()
-        model_path = os.path.join(os.path.dirname(__file__), 'FSRCNN_x2.pb')
+        model_path = os.path.join(os.path.dirname(__file__), "FSRCNN_x2.pb")
         if os.path.exists(model_path):
             sr.readModel(model_path)
             sr.setModel("fsrcnn", 2)
-            img_np = sr.upsample(img_np)
-        else:
-            # Fallback to basic resize if model not found
-            height, width = img_np.shape[:2]
-            img_np = cv2.resize(img_np, (width * 2, height * 2), interpolation=cv2.INTER_CUBIC)
+            return sr.upsample(img_np)
     except Exception as e:
-        print(f"Super-resolution failed, falling back to basic resize: {e}")
-        height, width = img_np.shape[:2]
-        img_np = cv2.resize(img_np, (width * 2, height * 2), interpolation=cv2.INTER_CUBIC)
+        print(f"Super-resolution failed, falling back to cubic resize: {e}")
 
-    # 2. Brightness & Contrast Enhancement (CLAHE)
-    lab = cv2.cvtColor(img_np, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    cl = clahe.apply(l)
-    limg = cv2.merge((cl, a, b))
-    enhanced = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    return cv2.resize(img_np, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
 
-    # 3. Noise Removal (Fast Non-local Means Denoising)
-    denoised = cv2.fastNlMeansDenoisingColored(enhanced, None, 10, 10, 7, 21)
 
-    # 4. Sharpening (Unsharp Masking)
-    gaussian = cv2.GaussianBlur(denoised, (9, 9), 10.0)
-    sharpened = cv2.addWeighted(denoised, 1.5, gaussian, -0.5, 0)
+def enhance_image_for_ocr(img_np):
+    """
+    OCR-safe enhancement.
 
-    return sharpened
+    Post-integration Level-2 pipeline (always FSRCNN + heavy denoise + unsharp)
+    corrupted Latin text on clear Aadhaar scans (e.g. 'Dinesh S' → 'UDSIL IFTHIBLD').
+    Prefer mild CLAHE; only upscale/denoise when the source is small or soft.
+    """
+    img_np = _maybe_upscale_for_ocr(img_np)
+    enhanced = _apply_clahe(img_np, clip_limit=2.0)
+
+    gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+    blur_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    # Light denoise only for noisy/soft sources — skip on sharp cards
+    if blur_var < 120:
+        enhanced = cv2.fastNlMeansDenoisingColored(enhanced, None, 6, 6, 7, 21)
+
+    return enhanced
+
+
+def prepare_ocr_candidates(img_np):
+    """
+    Build 1–2 images for PaddleOCR and keep the best read.
+    Candidate A: mild enhance (primary).
+    Candidate B: raw warped crop when primary text looks weak.
+    """
+    mild = enhance_image_for_ocr(img_np)
+    return [("mild", mild), ("raw", img_np.copy())]
 
 # Face Extraction & Alignment using RetinaFace
 def extract_and_align_face(img_np):
@@ -1186,54 +1223,230 @@ def extract_and_align_face(img_np):
     return None
 
 # Regex Parsing for Aadhaar Fields
+def _digits_only(s: str) -> str:
+    return re.sub(r"\D", "", s or "")
+
+
+def _format_aadhaar_display(num12: str) -> str:
+    if len(num12) != 12 or not num12.isdigit():
+        return num12 or ""
+    return f"{num12[:4]} {num12[4:8]} {num12[8:12]}"
+
+
+def _pick_aadhaar_number(text_lines):
+    """
+    Pick the printed Aadhaar number from OCR lines.
+
+    Rules:
+    - Prefer classic spaced groups: XXXX XXXX XXXX (bottom of card).
+    - Strip ALL non-digits before Verhoeff (spaces AND newlines).
+    - Never invent alternate digits to "force" Verhoeff pass — that caused
+      mismatched numbers to show as VALID after the Level-2 integration fix.
+    """
+    lines = [l.strip() for l in text_lines if l and str(l).strip()]
+    spaced = re.compile(r"(?<!\d)(\d{4})[\s\-]+(\d{4})[\s\-]+(\d{4})(?!\d)")
+    compact = re.compile(r"(?<!\d)(\d{12})(?!\d)")
+
+    spaced_candidates = []
+    for idx, line in enumerate(lines):
+        for m in spaced.finditer(line):
+            digits = m.group(1) + m.group(2) + m.group(3)
+            spaced_candidates.append((idx, digits, m.group(0)))
+
+    # Prefer the last spaced match — UID is printed near the bottom
+    if spaced_candidates:
+        spaced_candidates.sort(key=lambda t: t[0])
+        digits = spaced_candidates[-1][1]
+        return digits, validate_verhoeff(digits)
+
+    compact_candidates = []
+    for idx, line in enumerate(lines):
+        for m in compact.finditer(line):
+            compact_candidates.append((idx, m.group(1)))
+        dline = _digits_only(line)
+        if len(dline) == 12:
+            compact_candidates.append((idx, dline))
+        elif len(dline) > 12:
+            # sliding 12 within a single line only (avoid cross-line DOB merges)
+            for i in range(len(dline) - 11):
+                compact_candidates.append((idx, dline[i : i + 12]))
+
+    if compact_candidates:
+        compact_candidates.sort(key=lambda t: t[0])
+        digits = compact_candidates[-1][1]
+        return digits, validate_verhoeff(digits)
+
+    # Last resort: spaced pattern across full text, take last match
+    full_text = "\n".join(lines)
+    all_spaced = list(spaced.finditer(full_text))
+    if all_spaced:
+        m = all_spaced[-1]
+        digits = m.group(1) + m.group(2) + m.group(3)
+        return digits, validate_verhoeff(digits)
+
+    return "", False
+
+
+def _ocr_aadhaar_number_from_roi(img_np, upload_folder, filename_stem):
+    """
+    Level-2 style focused pass: OCR only the lower band where the UID is printed.
+    Improves digit accuracy without the old aggressive full-frame FSRCNN/sharpen.
+    """
+    if img_np is None or img_np.size == 0:
+        return "", False, []
+    h, w = img_np.shape[:2]
+    y0, y1 = int(h * 0.52), int(h * 0.88)
+    roi = img_np[y0:y1, 0:w]
+    if roi.size == 0:
+        return "", False, []
+
+    # Upscale ROI for clearer digits (cubic only — no denoise/unsharp)
+    rh, rw = roi.shape[:2]
+    if min(rh, rw) < 400:
+        roi = cv2.resize(roi, (rw * 2, rh * 2), interpolation=cv2.INTER_CUBIC)
+    roi = _apply_clahe(roi, clip_limit=1.8)
+
+    tmp = os.path.join(upload_folder, f"_aadhaar_roi_{filename_stem}.jpg")
+    try:
+        cv2.imwrite(tmp, roi)
+        ocr_result = ocr.ocr(tmp)
+        lines, _scores = _extract_paddle_lines(ocr_result)
+        num, valid = _pick_aadhaar_number(lines)
+        return num, valid, lines
+    except Exception as e:
+        print(f"Aadhaar ROI OCR failed: {e}")
+        return "", False, []
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+
+
+def _max_consonant_run(word: str) -> int:
+    run = max_run = 0
+    for ch in word.lower():
+        if ch.isalpha() and ch not in "aeiou":
+            run += 1
+            max_run = max(max_run, run)
+        else:
+            run = 0
+    return max_run
+
+
+def _is_plausible_english_name(line: str) -> bool:
+    """Reject Tamil-script OCR garbage misread as Latin (e.g. 'UDSIL IFTHIBLD')."""
+    if not line:
+        return False
+    # Must be mostly ASCII letters / spaces / dots
+    if re.search(r"[^\x00-\x7F]", line):
+        return False
+    cleaned = re.sub(r"[^A-Za-z\s.']", "", line).strip()
+    words = [w for w in re.split(r"\s+", cleaned) if w]
+    if not (1 <= len(words) <= 5):
+        return False
+    if not all(re.match(r"^[A-Za-z][A-Za-z.']*$", w) for w in words):
+        return False
+    letters = re.sub(r"[^A-Za-z]", "", cleaned)
+    if len(letters) < 2:
+        return False
+    vowels = sum(1 for ch in letters.lower() if ch in "aeiou")
+    if vowels / len(letters) < 0.18 and len(letters) >= 6:
+        return False
+
+    # ALL-CAPS long tokens from Tamil OCR are usually junk — reject consonant soup
+    titleish = any(w.istitle() or (len(w) == 1 and w.isupper()) for w in words)
+    for w in words:
+        if w.isupper() and len(w) >= 5 and not titleish:
+            w_letters = re.sub(r"[^A-Za-z]", "", w)
+            w_vowels = sum(1 for ch in w_letters.lower() if ch in "aeiou")
+            if w_vowels / max(len(w_letters), 1) < 0.22:
+                return False
+            if _max_consonant_run(w) >= 3:
+                return False
+
+    skip = re.compile(
+        r"(?i)^(government|india|unique|identification|authority|aadhaar|aadhar|uidai|"
+        r"male|female|dob|birth|enrolment|enrollment|issue|date)$"
+    )
+    if skip.search(cleaned):
+        return False
+    if re.search(
+        r"(?i)(government|india|unique|identification|authority|aadhaar|aadhar|uidai|enrolment)",
+        cleaned,
+    ):
+        return False
+    return True
+
+
 def parse_aadhaar_text(text_lines):
     full_text = "\n".join(text_lines)
-    
-    # 1. Aadhaar Number
-    aadhaar_pattern = re.compile(r'\b\d{4}\s\d{4}\s\d{4}\b|\b\d{12}\b')
-    aadhaar_matches = aadhaar_pattern.findall(full_text)
-    aadhaar_num = ""
-    valid_aadhaar = False
-    
-    if aadhaar_matches:
-        aadhaar_num = aadhaar_matches[0].replace(" ", "")
-        valid_aadhaar = validate_verhoeff(aadhaar_num)
+
+    # 1. Aadhaar Number (digit-only + Verhoeff-preferring)
+    aadhaar_num, valid_aadhaar = _pick_aadhaar_number(text_lines)
 
     # 2. Gender
     gender = ""
-    if re.search(r'(?i)\b(female|femle|fema)\b', full_text):
+    if re.search(r"(?i)\b(female|femle|fema)\b", full_text):
         gender = "FEMALE"
-    elif re.search(r'(?i)\b(male|mle|mal)\b', full_text):
+    elif re.search(r"(?i)\b(male|mle|mal)\b", full_text):
         gender = "MALE"
 
     # 3. Date of Birth
     dob = ""
-    dob_match = re.search(r'(?i)(dob|birth|birthdate|year\s*of\s*birth)\s*:?\s*(\d{2}[/\-]\d{2}[/\-]\d{4}|\d{4})', full_text)
+    dob_match = re.search(
+        r"(?i)(dob|birth|birthdate|year\s*of\s*birth)\s*:?\s*(\d{2}[/\-]\d{2}[/\-]\d{4}|\d{4})",
+        full_text,
+    )
     if dob_match:
         dob = dob_match.group(2)
+    else:
+        # Fallback: first DD/MM/YYYY that is not an issue-date-only cue nearby
+        m = re.search(r"\b(\d{2}[/\-]\d{2}[/\-]\d{4})\b", full_text)
+        if m:
+            dob = m.group(1)
 
-    # 4. Name extraction logic
+    # 4. Name — prefer English line immediately above DOB; never Tamil OCR junk
     name = ""
-    # Usually name resides above the DOB line or contains titles
     lines = [l.strip() for l in text_lines if l.strip()]
+    dob_idx = -1
     for idx, line in enumerate(lines):
-        if re.search(r'(?i)(government|india|unique|identification|authority|enrolment)', line):
-            continue
-        if re.search(r'(?i)(dob|birth|male|female|yob|father|husband)', line):
-            continue
-        # Names are generally capitalized and contain 2-3 words
-        words = line.split()
-        if len(words) >= 2 and len(words) <= 4 and all(w[0].isupper() for w in words if w.isalpha()):
-            name = line
+        if re.search(r"(?i)(dob|birth|yob)", line) or (
+            dob and dob in line
+        ):
+            dob_idx = idx
             break
+
+    if dob_idx > 0:
+        for back in range(1, min(4, dob_idx + 1)):
+            candidate = lines[dob_idx - back]
+            if re.search(r"(?i)(dob|birth|male|female|yob|father|husband|issue\s*date)", candidate):
+                continue
+            if _is_plausible_english_name(candidate):
+                name = candidate
+                break
+
+    if not name:
+        for line in lines:
+            if re.search(
+                r"(?i)(government|india|unique|identification|authority|enrolment|dob|birth|male|female|yob|father|husband|issue\s*date)",
+                line,
+            ):
+                continue
+            if _digits_only(line) and len(_digits_only(line)) >= 8:
+                continue
+            if _is_plausible_english_name(line):
+                name = line
+                break
 
     return {
         "document_type": "AADHAAR",
         "name": name,
         "dob": dob,
         "gender": gender,
-        "aadhaar_number": aadhaar_num,
-        "aadhaar_number_validated": valid_aadhaar
+        "aadhaar_number": _format_aadhaar_display(aadhaar_num) if aadhaar_num else "",
+        "aadhaar_number_validated": valid_aadhaar,
     }
 
 # PAN format validation: 5 letters + 4 digits + 1 letter (e.g., ABCDE1234F).
@@ -1448,6 +1661,141 @@ def parse_id_document(text_lines):
         result["document_type"] = "UNKNOWN"
     return result
 
+
+def _extract_paddle_lines(ocr_result):
+    """Normalize PaddleOCR v2 list / v3 dict results into (lines, scores)."""
+    extracted_lines = []
+    confidence_scores = []
+    if not ocr_result or not isinstance(ocr_result, list):
+        return extracted_lines, confidence_scores
+
+    first = ocr_result[0]
+    if isinstance(first, dict):
+        rec_texts = first.get("rec_texts", []) or []
+        rec_scores = first.get("rec_scores", []) or []
+        for text, conf in zip(rec_texts, rec_scores):
+            extracted_lines.append(text)
+            confidence_scores.append(float(conf))
+        # If scores missing, still keep texts
+        if rec_texts and not confidence_scores:
+            extracted_lines = list(rec_texts)
+    elif isinstance(first, list):
+        for line in first:
+            if line and len(line) > 1:
+                extracted_lines.append(line[1][0])
+                confidence_scores.append(float(line[1][1]))
+    return extracted_lines, confidence_scores
+
+
+def _score_ocr_parse(parsed_fields, avg_confidence, text_lines):
+    """Rank OCR candidate passes — prefer valid ID + plausible English name."""
+    score = float(avg_confidence or 0.0)
+    doc_type = (parsed_fields or {}).get("document_type", "")
+    if doc_type == "AADHAAR":
+        if parsed_fields.get("aadhaar_number_validated"):
+            score += 0.35
+        if parsed_fields.get("aadhaar_number"):
+            score += 0.1
+        name = (parsed_fields.get("name") or "").strip()
+        if name and _is_plausible_english_name(name):
+            score += 0.25
+        # Penalize Tamil→Latin garbage names
+        if name and not _is_plausible_english_name(name):
+            score -= 0.3
+    elif doc_type == "PAN":
+        if parsed_fields.get("pan_number_validated"):
+            score += 0.35
+        if parsed_fields.get("name"):
+            score += 0.15
+    # Prefer richer English text
+    ascii_chars = sum(1 for t in text_lines for ch in t if ch.isascii() and ch.isalpha())
+    score += min(ascii_chars, 80) / 400.0
+    return score
+
+
+def run_paddle_ocr_on_image(img_np, tmp_path):
+    cv2.imwrite(tmp_path, img_np)
+    ocr_result = ocr.ocr(tmp_path)
+    lines, scores = _extract_paddle_lines(ocr_result)
+    avg_conf = float(np.mean(scores)) if scores else 0.0
+    parsed = parse_id_document(lines)
+    return lines, scores, avg_conf, parsed
+
+
+def best_ocr_pass(warped_img, upload_folder, filename_stem):
+    """
+    Try mild enhance first, fall back to raw warp if parse quality is weak.
+    For Aadhaar, refine the UID with a lower-band ROI OCR so digits aren't
+    invented/mismatched while Verhoeff still shows VALID.
+    Returns (best_img, lines, scores, avg_conf, parsed, label).
+    """
+    candidates = prepare_ocr_candidates(warped_img)
+    best = None
+    for label, img in candidates:
+        tmp = os.path.join(upload_folder, f"_ocr_tmp_{label}_{filename_stem}.jpg")
+        try:
+            lines, scores, avg_conf, parsed = run_paddle_ocr_on_image(img, tmp)
+            rank = _score_ocr_parse(parsed, avg_conf, lines)
+            print(f"[OCR pass={label}] conf={avg_conf:.3f} rank={rank:.3f} parsed={parsed}")
+            item = (rank, label, img, lines, scores, avg_conf, parsed)
+            if best is None or item[0] > best[0]:
+                best = item
+            # Early exit if Aadhaar looks solid
+            if (
+                parsed.get("document_type") == "AADHAAR"
+                and parsed.get("aadhaar_number_validated")
+                and _is_plausible_english_name(parsed.get("name") or "")
+            ):
+                break
+            # Same for PAN
+            if (
+                parsed.get("document_type") == "PAN"
+                and parsed.get("pan_number_validated")
+                and (parsed.get("name") or "").strip()
+            ):
+                break
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+
+    if best is None:
+        empty = enhance_image_for_ocr(warped_img)
+        return empty, [], [], 0.0, parse_id_document([]), "mild"
+
+    _, label, img, lines, scores, avg_conf, parsed = best
+    parsed = dict(parsed or {})
+
+    # Aadhaar UID refinement: OCR the bottom number band on the winning image
+    # (and raw warp as backup). Never invent digits — Verhoeff only on OCR text.
+    if parsed.get("document_type") in ("AADHAAR", "UNKNOWN"):
+        roi_num, roi_valid, roi_lines = _ocr_aadhaar_number_from_roi(
+            img, upload_folder, filename_stem
+        )
+        if not roi_num:
+            roi_num, roi_valid, roi_lines = _ocr_aadhaar_number_from_roi(
+                warped_img, upload_folder, f"{filename_stem}_raw"
+            )
+        full_num = _digits_only(parsed.get("aadhaar_number", ""))
+        if roi_num:
+            print(
+                f"[Aadhaar ROI] full={full_num} roi={roi_num} "
+                f"roi_valid={roi_valid} roi_lines={roi_lines}"
+            )
+            # Trust ROI digits for the printed UID; validity = real Verhoeff only
+            parsed["aadhaar_number"] = _format_aadhaar_display(roi_num)
+            parsed["aadhaar_number_validated"] = bool(roi_valid)
+            if parsed.get("document_type") == "UNKNOWN" and roi_num:
+                parsed["document_type"] = "AADHAAR"
+        elif full_num:
+            # Recompute validity on exact digits (no variant invention)
+            parsed["aadhaar_number"] = _format_aadhaar_display(full_num)
+            parsed["aadhaar_number_validated"] = validate_verhoeff(full_num)
+
+    return img, lines, scores, avg_conf, parsed, label
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -1474,37 +1822,23 @@ def live_verify_api():
 
         filename_id = str(uuid.uuid4())
         
-        # 1. Face Extraction (RetinaFace)
-        face_img = extract_and_align_face(img)
+        # 1. Face Extraction (RetinaFace) — use warped crop before OCR enhance
+        doc_img, warped_ok = detect_and_warp_document(img)
+        face_img = extract_and_align_face(doc_img)
         face_filename = None
         if face_img is not None:
             face_filename = f"live_face_{filename_id}.jpg"
             face_path = os.path.join(app.config['UPLOAD_FOLDER'], face_filename)
             cv2.imwrite(face_path, face_img)
 
-        # 2. Document Detection & Warp
-        doc_img, warped_ok = detect_and_warp_document(img)
-        doc_img = enhance_image_for_ocr(doc_img)
+        # 2. OCR-safe enhance + best pass
+        best_img, extracted_lines, _scores, _avg, parsed_fields, _label = best_ocr_pass(
+            doc_img, app.config['UPLOAD_FOLDER'], filename_id
+        )
 
         doc_filename = f"live_doc_{filename_id}.jpg"
         doc_path = os.path.join(app.config['UPLOAD_FOLDER'], doc_filename)
-        cv2.imwrite(doc_path, doc_img)
-        
-        ocr_result = ocr.ocr(doc_path)
-        
-        extracted_lines = []
-        if ocr_result and isinstance(ocr_result, list):
-            if isinstance(ocr_result[0], dict):
-                res_dict = ocr_result[0]
-                rec_texts = res_dict.get('rec_texts', [])
-                for text in rec_texts:
-                    extracted_lines.append(text)
-            elif isinstance(ocr_result[0], list):
-                for line in ocr_result[0]:
-                    if line and len(line) > 1:
-                        extracted_lines.append(line[1][0])
-
-        parsed_fields = parse_id_document(extracted_lines)
+        cv2.imwrite(doc_path, best_img)
 
         # 3. Face Matching (Step 1 vs Live)
         face_match_result = None
@@ -1557,56 +1891,32 @@ def run_ocr():
         quality_report = check_image_quality(img)
 
         # Step 2: Document Detection & Warp
-        processed_img, warped_ok = detect_and_warp_document(img)
+        warped_img, warped_ok = detect_and_warp_document(img)
 
-        # Step 3: Brightness Correction
-        processed_img = enhance_image_for_ocr(processed_img)
-
-        # Step 3.5: Extract Face using RetinaFace
-        face_img = extract_and_align_face(processed_img)
+        # Step 3: Face from warped crop (before OCR enhance)
+        face_img = extract_and_align_face(warped_img)
         face_filename = None
         if face_img is not None:
             face_filename = f"aadhaar_face_{filename}.jpg"
             face_path = os.path.join(app.config['UPLOAD_FOLDER'], face_filename)
             cv2.imwrite(face_path, face_img)
 
-        # Save the pipeline image for verification
+        # Step 4: OCR-safe enhance + dual-pass PaddleOCR (mild vs raw)
+        stem = os.path.splitext(filename)[0]
+        processed_img, extracted_lines, confidence_scores, avg_confidence, parsed_fields, ocr_pass = best_ocr_pass(
+            warped_img, app.config['UPLOAD_FOLDER'], stem
+        )
+
+        # Save the pipeline image used for the winning OCR pass
         pipeline_filename = f"processed_{filename}"
         pipeline_path = os.path.join(app.config['UPLOAD_FOLDER'], pipeline_filename)
         cv2.imwrite(pipeline_path, processed_img)
-
-        # Step 4: PaddleOCR Extraction
-        ocr_result = ocr.ocr(pipeline_path)
-        
-        extracted_lines = []
-        confidence_scores = []
-        if ocr_result and isinstance(ocr_result, list):
-            # Check if it's the new dictionary format (PaddleX / PaddleOCR v3+)
-            if isinstance(ocr_result[0], dict):
-                res_dict = ocr_result[0]
-                rec_texts = res_dict.get('rec_texts', [])
-                rec_scores = res_dict.get('rec_scores', [])
-                for text, conf in zip(rec_texts, rec_scores):
-                    extracted_lines.append(text)
-                    confidence_scores.append(conf)
-            elif isinstance(ocr_result[0], list):
-                # Old format: [[[box], [text, conf]], ...]
-                for line in ocr_result[0]:
-                    if line and len(line) > 1:
-                        text = line[1][0]
-                        conf = line[1][1]
-                        extracted_lines.append(text)
-                        confidence_scores.append(conf)
-
-        avg_confidence = float(np.mean(confidence_scores)) if confidence_scores else 0.0
-
-        # Step 5: Regex Parsing (auto-detects Aadhaar vs PAN)
-        parsed_fields = parse_id_document(extracted_lines)
 
         return jsonify({
             "status": "success",
             "quality_check": quality_report,
             "perspective_corrected": warped_ok,
+            "ocr_pass": ocr_pass,
             "raw_text": extracted_lines,
             "ocr_confidence": round(avg_confidence * 100, 2),
             "parsed_fields": parsed_fields,

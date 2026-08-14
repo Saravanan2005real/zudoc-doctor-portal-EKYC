@@ -1,22 +1,3 @@
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-/bin/
-/dist/
-
-# Local databases & runtime data
-*.db
-*.db-journal
-*.sqlite
-*.sqlite3
-uploads/
-python_backend/uploads/
-ocr_service/ocr_uploads/
-*.log
-
 # Python
 __pycache__/
 *.py[cod]
@@ -25,23 +6,29 @@ __pycache__/
 .venv/
 venv/
 .env
-.env.*
-!.env.example
+.Python
 
 # IDE / OS
 .idea/
 .vscode/
 *.swp
-*.swo
 .DS_Store
 Thumbs.db
 
-# Env & secrets
-*.pem
-*.key
+# Runtime uploads / caches
+uploads/
+python_backend/uploads/
+ocr_service/ocr_uploads/
+**/_ocr_tmp_*.jpg
+**/_aadhaar_roi_*.jpg
 
-# Test / coverage
-coverage.out
-coverage.html
-.pytest_cache/
-.mypy_cache/
+# Local test images (not part of the product)
+dummy.png
+test_image.png
+
+# Old GazeTracking clone (superseded by eye tracking/)
+eye tracker/
+
+# Torch / ML caches
+.cache/
+**/__pycache__/

@@ -1,6 +1,6 @@
-# ZuDoc — Doctor Verification & eKYC Portal
+# ZuDoc — Doctor Verification, eKYC & Eye Tracking
 
-Enterprise-style **doctor identity verification (eKYC)** for healthcare platforms. Doctors register, upload credentials and government IDs, run an automated OCR + face-extraction evaluation, then unlock clinical workflows (e.g. digital prescriptions).
+Enterprise-style **doctor identity verification (eKYC)** for healthcare platforms, plus a standalone **FGI-Net eye-tracking** module for gaze direction and per-eye (x, y) plots.
 
 **Repository:** [github.com/Saravanan2005real/zudoc-doctor-portal-EKYC](https://github.com/Saravanan2005real/zudoc-doctor-portal-EKYC)
 
@@ -11,9 +11,10 @@ Enterprise-style **doctor identity verification (eKYC)** for healthcare platform
 | Goal | How it is achieved |
 |------|--------------------|
 | Trust doctors before clinical actions | Multi-step wizard + OCR of Aadhaar/PAN + face presence + name cross-match |
-| Keep identity checks automated | Flask OCR microservice (PaddleOCR + RetinaFace + image enhancement) |
+| Keep identity checks automated | Flask OCR microservice (PaddleOCR + RetinaFace + OCR-safe enhancement) |
 | Persist audit trail | PostgreSQL via SQLAlchemy + verification history |
-| Demo the full loop locally | FastAPI serves API **and** the MedTrust portal UI from one process |
+| Track live gaze / liveness signal | FGI-Net + MediaPipe iris → top / bottom / left / right / center + (x,y) graph |
+| Demo the full loop locally | FastAPI serves API **and** portal UI; eye tracking runs as a webcam demo |
 
 ---
 
@@ -24,7 +25,8 @@ Enterprise-style **doctor identity verification (eKYC)** for healthcare platform
 | Portal UI | Vanilla HTML / CSS / JS (`public/`) |
 | Backend API | **FastAPI** + Uvicorn + Pydantic (`python_backend/`) |
 | ORM / DB | SQLAlchemy 2 + **PostgreSQL** |
-| OCR microservice | **Flask** + PaddleOCR + RetinaFace + OpenCV SR/CLAHE (`ocr_service/`) |
+| OCR microservice | **Flask** + PaddleOCR + RetinaFace + OpenCV (`ocr_service/`) |
+| Eye tracking | **FGI-Net** (PyTorch) + MediaPipe Face Mesh + OpenCV (`eye tracking/`) |
 | Auth | Password hash + SMS OTP (mock prints to console) + JWT / refresh tokens |
 | Deploy | Docker Compose, Nginx, Kubernetes manifests |
 
@@ -32,14 +34,15 @@ Enterprise-style **doctor identity verification (eKYC)** for healthcare platform
 
 ---
 
-## Architecture (current runtime)
+## System architecture (full platform)
 
-Two long-running services plus a database:
+Three product surfaces share one repo: the **doctor portal**, the **OCR microservice**, and the **eye-tracking module**.
 
 ```mermaid
 flowchart TB
-  subgraph Client["Doctor / Admin browser"]
+  subgraph Client["Browser / Webcam"]
     UI["MedTrust Portal<br/>public/ — Steps 1–5"]
+    CAM["Webcam<br/>eye tracking demo"]
   end
 
   subgraph Edge["Optional edge (Compose)"]
@@ -53,13 +56,19 @@ flowchart TB
     STORE["Local file storage<br/>uploads/"]
   end
 
-  subgraph OCR["ocr_service — Flask"]
-    OCRAPI["POST /api/v1/ocr<br/>:5001"]
-    PIPE["Quality → Warp → Enhance<br/>→ RetinaFace → PaddleOCR → Parse"]
-    FILES["ocr_uploads/"]
+  subgraph OCR["ocr_service — Flask :5001"]
+    OCRAPI["POST /api/v1/ocr"]
+    PIPE["Quality → Warp → Mild enhance<br/>→ RetinaFace → PaddleOCR → Parse"]
   end
 
-  PG[("PostgreSQL<br/>doctor_verification_db")]
+  subgraph EyeMod["eye tracking/ — FGI-Net module"]
+    DEMO["demo.py"]
+    ENG["FaceEyeEngine<br/>MediaPipe iris + facing gate"]
+    FGI["FGI-Net gaze head"]
+    PLOT["(x,y) graph L/R pupils"]
+  end
+
+  PG[("PostgreSQL")]
 
   UI -->|HTTP| NGX
   NGX --> API
@@ -67,24 +76,31 @@ flowchart TB
   API --> SVC
   SVC --> REPO --> PG
   SVC --> STORE
-  SVC -->|"multipart document"| OCRAPI
-  OCRAPI --> PIPE --> FILES
+  SVC -->|"KYC images"| OCRAPI
+  OCRAPI --> PIPE
+
+  CAM --> DEMO
+  DEMO --> ENG
+  DEMO --> FGI
+  ENG --> PLOT
+  DEMO --> PLOT
 ```
 
 ### Component map
 
-| Component | Path | Port | Responsibility |
-|-----------|------|------|----------------|
-| Portal + API | `python_backend/` (serves `public/`) | **8000** local / **8080** Compose | Auth, wizard APIs, document vault, **evaluate-ekyc**, prescriptions |
-| OCR microservice | `ocr_service/app.py` | **5001** | Image quality, document warp, SR enhance, face crop, OCR, Aadhaar/PAN parse |
-| Database | PostgreSQL | **5433** local default / **5432** Compose | Doctors, docs, OTP, history, jobs |
-| Nginx | `nginx.conf` | **80** | Reverse proxy to API (Compose only) |
+| Component | Path | Port / entry | Responsibility |
+|-----------|------|--------------|----------------|
+| Portal + API | `python_backend/` | **:8000** / **:8080** | Auth, wizard APIs, documents, **evaluate-ekyc**, prescriptions |
+| OCR microservice | `ocr_service/app.py` | **:5001** | Aadhaar/PAN OCR, face crop, Verhoeff/format checks |
+| Eye tracking | `eye tracking/demo.py` | Webcam process | Both-eyes facing gate, pupil (x,y), direction label |
+| Database | PostgreSQL | **:5433** local / **:5432** Compose | Doctors, docs, OTP, history |
+| Nginx | `nginx.conf` | **:80** | Reverse proxy (Compose) |
+
+See also: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`DESIGN.md`](DESIGN.md), [`eye tracking/README.md`](eye%20tracking/README.md).
 
 ---
 
 ## End-to-end doctor pipeline (Steps 1–5)
-
-This is the **live wizard path** used by the portal.
 
 ```mermaid
 flowchart LR
@@ -97,151 +113,178 @@ flowchart LR
 
 ### Step 1 — Registration & auth
 
-1. Doctor registers with mobile + password → `POST /api/v1/doctors/register`
-2. Backend hashes password, creates `Doctor` (`NOT_SUBMITTED`), generates 6-digit OTP
-3. Mock SMS provider **prints OTP in the FastAPI terminal**
-4. Doctor verifies OTP → `POST /api/v1/doctors/verify-otp` → JWT + refresh token
-5. Returning users: `POST /api/v1/doctors/login`
+1. Register → `POST /api/v1/doctors/register`
+2. Backend creates `Doctor` (`NOT_SUBMITTED`), hashes password, stores OTP
+3. Mock SMS **prints OTP in the FastAPI terminal**
+4. Verify → `POST /api/v1/doctors/verify-otp` → JWT + refresh token
+5. Login → `POST /api/v1/doctors/login`
 
-Wizard identity for later steps is primarily the header **`X-Doctor-Public-ID`**.
+Wizard identity for later steps is primarily **`X-Doctor-Public-ID`**.
 
 ### Step 2 — Credentials
 
 | Data | Endpoint |
 |------|----------|
-| Medical license / council / year | `POST /api/v1/doctors/licenses` |
+| License / council / year | `POST /api/v1/doctors/licenses` |
 | Degree / university / year | `POST /api/v1/doctors/qualifications` |
-| Clinic / practice listing | `POST /api/v1/doctors/clinics` |
-| Optional profile | `PUT /api/v1/doctors/profile` |
+| Clinic | `POST /api/v1/doctors/clinics` |
+| Profile | `PUT /api/v1/doctors/profile` |
 
 ### Step 3 — Document vault + submit
 
-1. Upload multipart files → `POST /api/v1/doctors/documents`
-2. Backend validates type/size, SHA-256 hash, optional virus-scan hook, versions files under `uploads/doctors/{public_id}/documents/`
-3. Checklist before submit: mobile verified, license, qualification, clinic, registration cert, degree cert, government ID (`AADHAAR` / `PAN` / `PASSPORT`)
-4. Submit package → `POST /api/v1/doctors/submit-verification` → status `PENDING`, history row, optional `VerificationJob` enqueued
-5. UI advances to Step 4 and starts evaluation
+1. Upload → `POST /api/v1/doctors/documents` (type + file + hash + versioning)
+2. Checklist: mobile verified, license, qualification, clinic, reg cert, degree, govt ID
+3. Submit → `POST /api/v1/doctors/submit-verification` → `PENDING`
+4. UI advances to Step 4
 
-### Step 4 — eKYC evaluation (core pipeline)
+### Step 4 — eKYC evaluation
 
-Triggered by **`POST /api/v1/doctors/evaluate-ekyc`** with `X-Doctor-Public-ID`.
-
-Implemented in `python_backend/services/ekyc_evaluation_service.py`.
+`POST /api/v1/doctors/evaluate-ekyc` → `python_backend/services/ekyc_evaluation_service.py`
 
 ```mermaid
 flowchart TD
-  A(["POST /evaluate-ekyc"]) --> B["Load doctor by public ID"]
-  B --> C{"OCR service healthy?<br/>GET :5001/"}
-  C -->|no| MR1["MANUAL_REVIEW<br/>OCR unreachable"]
-  C -->|yes| D["Select KYC docs<br/>AADHAAR / PAN / PASSPORT<br/>else first 2 docs"]
-  D --> E["For each doc:<br/>POST :5001/api/v1/ocr"]
-  E --> F{"Any OCR success?"}
-  F -->|no| MR2["MANUAL_REVIEW or FAILED"]
-  F -->|yes| G["Stage 3<br/>ID format + face presence"]
-  G --> H["Stage 4<br/>Name similarity vs profile"]
-  H --> I{"Decision rules"}
-  I -->|id_validated OR face+conf≥40 OR conf≥60| AV["AUTO_VERIFIED<br/>prescription_enabled=true"]
-  I -->|soft issues / weak signals| MR3["MANUAL_REVIEW"]
-  I -->|no docs| FAIL["FAILED / REJECTED"]
+  A(["evaluate-ekyc"]) --> B[Load doctor]
+  B --> C{OCR healthy?}
+  C -->|no| MR1[MANUAL_REVIEW]
+  C -->|yes| D[Prefer AADHAAR/PAN/PASSPORT]
+  D --> E["POST :5001/api/v1/ocr per doc"]
+  E --> F{OCR success?}
+  F -->|no| MR2[MANUAL_REVIEW / FAILED]
+  F -->|yes| G[ID format + face presence]
+  G --> H[Name similarity vs profile]
+  H --> I{Decision}
+  I -->|strong signals| AV[AUTO_VERIFIED]
+  I -->|weak signals| MR3[MANUAL_REVIEW]
+  I -->|no docs| FAIL[FAILED / REJECTED]
 ```
 
-#### Stage breakdown (returned to UI as `stages[]`)
+| Stage | Meaning |
+|-------|---------|
+| 1 Application Submitted | Package loaded |
+| 2 OCR + Face Extraction | Call OCR microservice |
+| 3 ID & Face Check | Verhoeff / PAN format + face crop present |
+| 4 Name Cross-Match | OCR name vs profile (Jaccard %) |
+| 5 Final Decision | `AUTO_VERIFIED` / `MANUAL_REVIEW` / `FAILED` |
 
-| # | Stage | What happens |
-|---|-------|----------------|
-| 1 | Application Submitted | Doctor + package loaded |
-| 2 | eKYC OCR + Face Extraction | Health-check OCR; send each KYC image; store face/processed URLs |
-| 3 | ID Format & Face Visibility | Aadhaar Verhoeff / PAN format flags; `face_detected` if RetinaFace crop exists; best OCR confidence |
-| 4 | Profile Cross-Match | Token Jaccard similarity of OCR name vs `first_name + last_name` (0–100%) |
-| 5 | Final Decision | `AUTO_VERIFIED` / `MANUAL_REVIEW` / `FAILED` |
+**Decision summary**
 
-#### Decision rules (summary)
+- **AUTO_VERIFIED** — ID validated **or** (face + OCR conf ≥ 40%) **or** conf ≥ 60%
+- **MANUAL_REVIEW** — OCR down / weak signals / soft mismatches
+- **FAILED** — no documents (status → `REJECTED`)
 
-- **FAILED** — no documents to evaluate (status becomes `REJECTED`)
-- **AUTO_VERIFIED** — ID validated **or** (face detected and OCR confidence ≥ 40%) **or** confidence ≥ 60%
-- **MANUAL_REVIEW** — OCR down / all OCR failed with errors / signals too weak; soft reasons include missing ID validation, missing face, or name score &lt; 40%
+### Step 5 — Prescription studio
 
-#### Step 5 unlock
-
-| Outcome | Doctor status | `prescription_enabled` | UI Step 5 |
-|---------|---------------|------------------------|-----------|
-| `AUTO_VERIFIED` | `AUTO_VERIFIED` | `true` | Unlocked |
-| `MANUAL_REVIEW` | `MANUAL_REVIEW` | `false` | Unlocked in UI for demo continuity |
-| `FAILED` | `REJECTED` | `false` | Blocked — re-upload / re-run |
-
-> **Note:** Portal Step 4 uses face **extraction / presence** (RetinaFace), not DeepFace live matching. Live webcam match lives on the OCR service’s own `/live` demo (`POST /api/v1/live_verify`).
-
-### Step 5 — Digital prescription studio
-
-After a non-failed Step 4 decision, the UI opens the prescription form → `POST /api/v1/prescriptions`.
+Unlocked in UI when Step 4 is not `FAILED` → `POST /api/v1/prescriptions`.
 
 ---
 
-## OCR microservice pipeline (inside `:5001`)
-
-Every `POST /api/v1/ocr` call runs this chain:
+## OCR microservice pipeline (`:5001`)
 
 ```mermaid
 flowchart TD
-  U(["Uploaded image"]) --> Q["Image quality check<br/>size · blur · brightness · aspect"]
-  Q --> W["Document detect + perspective warp<br/>YOLO optional / contour fallback"]
-  W --> E["Enhance for OCR<br/>FSRCNN_x2 + CLAHE + denoise"]
-  E --> F["RetinaFace<br/>112×112 face crop"]
-  E --> O["PaddleOCR<br/>lines + confidence %"]
-  O --> P["parse_id_document<br/>Aadhaar or PAN fields"]
-  P --> R(["JSON response"])
-  F --> R
+  U([Upload]) --> Q[Quality check]
+  Q --> W[Detect + perspective warp]
+  W --> E["OCR-safe enhance<br/>mild CLAHE · SR only if soft/small"]
+  E --> FACE[RetinaFace face crop]
+  E --> PASS["Dual OCR pass<br/>mild vs raw → best parse"]
+  PASS --> ROI["Aadhaar UID ROI refine<br/>bottom band digits"]
+  ROI --> P[Parse Aadhaar / PAN]
+  P --> R([JSON + face URL])
+  FACE --> R
 ```
 
-### Success response (high level)
+**Important OCR fixes in this tree**
 
-```json
-{
-  "status": "success",
-  "quality_check": { "passed": true },
-  "perspective_corrected": true,
-  "raw_text": ["..."],
-  "ocr_confidence": 72.5,
-  "parsed_fields": {
-    "document_type": "AADHAAR",
-    "name": "...",
-    "dob": "...",
-    "aadhaar_number": "...",
-    "aadhaar_number_validated": true
-  },
-  "processed_image_url": "/ocr_uploads/processed_....jpg",
-  "face_image_url": "/ocr_uploads/aadhaar_face_....jpg"
-}
-```
-
-| Document | Key parsed fields |
-|----------|-------------------|
-| Aadhaar | name, dob, gender, aadhaar_number, `aadhaar_number_validated` (Verhoeff) |
-| PAN | name, father_name, dob, pan_number, `pan_number_validated` |
-
-**OCR endpoints**
+- Aggressive Level-2 denoise/unsharp was harming Latin text → **mild enhance** by default
+- Aadhaar Verhoeff no longer invents alternate digits to force VALID
+- Prefers spaced `XXXX XXXX XXXX` and ROI OCR for the UID
+- Rejects Tamil→Latin name garbage (e.g. `UDSIL IFTHIBLD`)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/` | Demo upload UI + health target |
-| `GET` | `/live` | Live webcam verification UI |
-| `POST` | `/api/v1/ocr` | Main OCR used by portal Step 4 |
-| `POST` | `/api/v1/live_verify` | Live frame + optional DeepFace match |
-| `GET` | `/ocr_uploads/<file>` | Served crops / processed images |
-
-Keep `ocr_service/FSRCNN_x2.pb` — required for super-resolution enhancement.
+| `GET` | `/` | Demo UI + health |
+| `GET` | `/live` | Live webcam verify UI |
+| `POST` | `/api/v1/ocr` | Portal Step 4 OCR |
+| `POST` | `/api/v1/live_verify` | Live frame + optional DeepFace |
+| `GET` | `/ocr_uploads/<file>` | Crops / processed images |
 
 ---
 
-## Designed async verification job pipeline (secondary)
+## Eye tracking module (`eye tracking/`)
 
-Submit also can enqueue a `VerificationJob` (`FULL_PIPELINE`). The design intent (also sketched under `python_backend/verification/`) is:
+Standalone webcam module built around **FGI-Net** (*Fusion Global Information* gaze estimator) plus **MediaPipe Face Mesh** iris landmarks.
 
-```text
-QUEUED → OCR → Compare → Council registry → Fraud rules → Decision → Admin review / DLQ
+### Goals
+
+1. Face may appear **anywhere** in the frame
+2. Track + plot **only when both eyes face the camera**
+3. Predict **top / bottom / left / right / center**
+4. Live **(x, y)** graph for left and right pupils (`x,y ∈ [-1, 1]`)
+
+### Architecture
+
+```mermaid
+flowchart TD
+  CAM([Webcam frame]) --> MP[MediaPipe Face Mesh + iris]
+  MP --> FACE{Both eyes open<br/>and facing camera?}
+  FACE -->|no| WAIT[Pause plot<br/>turn_to_camera / no_face]
+  FACE -->|yes| PUPIL[Per-eye pupil x,y]
+  PUPIL --> CAL[Auto-center calibrator<br/>remove resting upward bias]
+  CAL --> DIR[Direction classifier]
+  CAL --> GRAPH[(x,y) graph L/R trails]
+  DIR --> LABEL[Looking: TOP/BOTTOM/LEFT/RIGHT/CENTER]
+  FACE -->|yes| FGI[FGI-Net face crop → pitch/yaw]
+  FGI -.->|optional refine with real weights| DIR
 ```
 
-The **wizard Step 4 path does not wait on this worker**. Day-to-day local demos rely on the **synchronous `evaluate-ekyc`** flow above. Compose may still start Redis/RabbitMQ for a production-shaped topology.
+### Package layout
+
+```text
+eye tracking/
+├── FGI-Net/                 # Upstream architecture reference
+├── fgi_eye_tracker/         # Our package
+│   ├── fgi_net.py           # Import-safe FGI-Net
+│   ├── face_eyes.py         # MediaPipe + OpenCV fallback
+│   ├── eyes.py              # Pupil ROI + direction rules
+│   ├── calibrate.py         # Resting-gaze center lock
+│   ├── plot.py              # Live Cartesian graph
+│   ├── tracker.py           # EyeTracker API
+│   └── preprocess.py        # Face crop normalize for FGI-Net
+├── weights/
+│   ├── fgi_net.pth          # Checkpoint (architecture-init unless replaced)
+│   └── fgi_benchmark.json   # Local size / latency numbers
+├── demo.py
+├── requirements.txt
+└── scripts/
+    ├── init_weights.py
+    └── benchmark_fgi.py
+```
+
+### Run eye tracking
+
+```powershell
+cd "eye tracking"
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+python demo.py
+```
+
+- Face the camera and look **straight** ~1s for auto-center calibration
+- Then look top / bottom / left / right — graph updates while both eyes face the camera
+- **Esc** to quit
+
+### FGI-Net size & speed (measured on this project’s CPU host)
+
+| Metric | Value |
+|--------|------:|
+| Parameters | **~1.52 M** |
+| Checkpoint | **~6.1 MB** |
+| Paper FLOPs / our MACs | **~0.38 G** |
+| Mean latency (CPU, 224²) | **~25 ms** (~40 FPS) |
+| Paper angular error (MPIIFaceGaze) | **3.74°** (needs author-trained weights) |
+
+> Upstream [CZ178/FGI-Net](https://github.com/CZ178/FGI-Net) publishes architecture; trained paper weights are not on GitHub. Bundled `fgi_net.pth` is an architecture-compatible init for wiring/smoke tests unless you replace it. Direction in the demo is driven primarily by **iris geometry** (works without paper weights).
 
 ---
 
@@ -249,25 +292,13 @@ The **wizard Step 4 path does not wait on this worker**. Day-to-day local demos 
 
 ```text
 eKYC/
-├── python_backend/          # FastAPI app, services, entities, repositories
-│   ├── main.py              # App entry, static UI, health endpoints
-│   ├── controllers/         # HTTP routes
-│   ├── services/            # Auth, documents, ekyc_evaluation, …
-│   ├── entities/            # SQLAlchemy models
-│   ├── repositories/
-│   ├── storage/             # Local / S3 / Cloudinary adapters
-│   ├── sms/                 # Mock / MSG91 / Twilio
-│   └── uploads/             # Runtime doctor documents
+├── python_backend/          # FastAPI portal backend
 ├── ocr_service/             # Flask OCR + face microservice
-│   ├── app.py
-│   ├── FSRCNN_x2.pb
-│   └── ocr_uploads/         # Runtime OCR artifacts
-├── public/                  # Portal UI (index.html, app.js, styles)
-├── migrations/              # SQL schema 000001–000006
-├── docs/
-│   ├── ARCHITECTURE.md      # Detailed Mermaid diagrams
-│   └── openapi.yaml
-├── k8s/                     # Deployment, Service, Ingress, HPA, secrets
+├── eye tracking/            # FGI-Net eye tracking module + demo
+├── public/                  # Portal UI
+├── migrations/              # SQL 000001–000006
+├── docs/                    # ARCHITECTURE.md, openapi.yaml
+├── k8s/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── nginx.conf
@@ -280,16 +311,15 @@ eKYC/
 ## Prerequisites
 
 - **Python 3.10+**
-- **PostgreSQL** with database `doctor_verification_db`
+- **PostgreSQL** (`doctor_verification_db`) for the portal
+- Webcam for eye tracking
 - Optional: Docker / Docker Compose
 
 ---
 
-## Quick start (local)
+## Quick start (portal + OCR)
 
 ### 1. Database
-
-Create DB `doctor_verification_db`. Defaults used by the backend:
 
 | Variable | Default |
 |----------|---------|
@@ -299,9 +329,7 @@ Create DB `doctor_verification_db`. Defaults used by the backend:
 | `DB_PASSWORD` | `dinesh_2006` |
 | `DB_NAME` | `doctor_verification_db` |
 
-Apply SQL under `migrations/` if you prefer explicit schema; local/dev also runs `Base.metadata.create_all` on startup.
-
-### 2. OCR microservice (required for Step 4)
+### 2. OCR
 
 ```bash
 cd ocr_service
@@ -311,7 +339,7 @@ python app.py
 
 → `http://127.0.0.1:5001`
 
-### 3. FastAPI backend + portal
+### 3. Portal
 
 ```bash
 cd python_backend
@@ -319,11 +347,9 @@ pip install -r requirements.txt
 python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-→ Portal: [http://127.0.0.1:8000](http://127.0.0.1:8000)
+→ `http://127.0.0.1:8000` — OTP prints in the backend terminal.
 
-OTP codes appear in the **backend terminal** (mock SMS).
-
-> Keep **both** processes running. Step 4 fails into `MANUAL_REVIEW` if OCR on `:5001` is down. First OCR call can take a long time while models load (UI timeout is ~300s).
+Keep **both** OCR and FastAPI running for Step 4.
 
 ---
 
@@ -335,12 +361,10 @@ docker compose up --build
 
 | Service | URL / port |
 |---------|------------|
-| Portal / API (direct) | http://localhost:8080 |
+| Portal / API | http://localhost:8080 |
 | Nginx | http://localhost:80 |
 | OCR | http://localhost:5001 |
 | Postgres | localhost:5432 |
-| Redis | 6379 |
-| RabbitMQ | 5672 / management 15672 |
 
 ---
 
@@ -355,9 +379,6 @@ docker compose up --build
 | **eKYC** | `POST /api/v1/doctors/evaluate-ekyc` |
 | Prescriptions | `POST /api/v1/prescriptions` |
 | Health | `GET /health/live` · `/health/ready` · `/metrics` |
-| Admin (UI present; APIs partially stubbed) | `/api/v1/admin/...` |
-
-Fuller contract: [`docs/openapi.yaml`](docs/openapi.yaml).
 
 ---
 
@@ -366,41 +387,21 @@ Fuller contract: [`docs/openapi.yaml`](docs/openapi.yaml).
 | Variable | Purpose |
 |----------|---------|
 | `JWT_SECRET` | Access token signing |
-| `DB_*` | PostgreSQL connection |
-| `PORT` | Backend listen port (Compose/K8s often `8080`) |
+| `DB_*` | PostgreSQL |
+| `PORT` | Backend listen port |
 | `OCR_SERVICE_URL` | Default `http://127.0.0.1:5001/api/v1/ocr` |
-
----
-
-## Database migrations (overview)
-
-| Migration | Adds |
-|-----------|------|
-| `000001` | Core doctors, licenses, quals, clinics, documents, history |
-| `000002` | OTP + refresh tokens, mobile verified / lockout |
-| `000003` | Profile + document metadata (hash, size, filename) |
-| `000004` | `verification_jobs`, `document_ocr_results` |
-| `000005` | Admin review tables, assign / prescription flags |
-| `000006` | Audit events, DLQ, prescriptions |
-
----
-
-## Deployment notes
-
-- **Kubernetes:** `k8s/` — Deployment (3 replicas), Service, Ingress, ConfigMap, Secret, HPA; probes on `/health/live` and `/health/ready`
-- **CI:** `.github/workflows/ci-cd.yml` — Python checks + Docker image build on `main`
-- Runtime OCR uploads under `ocr_service/ocr_uploads/` are generated data; do not treat them as source
 
 ---
 
 ## Further reading
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — detailed Mermaid views (system context, sequences, OCR internals, deploy)
-- [`DESIGN.md`](DESIGN.md) — design goals, domain model, extensibility
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Mermaid system / sequence / deploy views
+- [`eye tracking/README.md`](eye%20tracking/README.md) — eye module quick start
+- [`DESIGN.md`](DESIGN.md) — design goals & extensibility
 - [`docs/openapi.yaml`](docs/openapi.yaml) — API contract
 
 ---
 
 ## License / status
 
-Internal / project demo for ZuDoc doctor onboarding and eKYC evaluation. Production SMS, cloud OCR credentials, and full admin review wiring are intentionally left as provider swaps — see `DESIGN.md` non-goals.
+Internal / project demo for ZuDoc doctor onboarding, eKYC evaluation, and gaze tracking experiments. Production SMS, cloud OCR credentials, author-trained FGI weights, and full admin review wiring remain provider swaps — see `DESIGN.md` non-goals.
