@@ -7,7 +7,7 @@ class VerificationDeadJob(Base):
     __tablename__ = "verification_dead_jobs"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    job_id = Column(nullable=False)
+    job_id = Column(String(36), nullable=False)
     doctor_id = Column(String(36), ForeignKey("doctors.id", ondelete="CASCADE"), nullable=False, index=True)
     failure_reason = Column(Text, nullable=False)
     retry_count = Column(Integer, default=0, nullable=False)

@@ -413,7 +413,21 @@
             <span class="badge badge-warning" id="pipeline-status-badge">QUEUED</span>
           </div>
 
-          <div class="status-timeline mt-4">
+          <!-- Liveness Check Section -->
+          <div class="liveness-section mt-4" id="liveness-section">
+            <h3>👁️ Step 4.1: Liveness Check (Eye Tracking)</h3>
+            <p class="subtitle">Please face the camera and keep both eyes visible to prove you are present.</p>
+            <div class="video-container" style="text-align: center; position: relative;">
+              <video id="liveness-video" width="480" height="360" autoplay muted style="border-radius: 8px; border: 2px solid var(--border-color);"></video>
+              <canvas id="liveness-canvas" width="480" height="360" style="display: none;"></canvas>
+              <div id="liveness-overlay" style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 480px; height: 360px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); border-radius: 8px;">
+                <button class="btn btn-primary btn-lg" id="btn-start-liveness">Start Webcam</button>
+              </div>
+            </div>
+            <div class="alert alert-info mt-2 text-center" id="liveness-status">Status: Waiting for webcam...</div>
+          </div>
+
+          <div class="status-timeline mt-4 hidden" id="pipeline-timeline">
             <div class="timeline-step" id="tstep-1">
               <div class="t-icon">📤</div>
               <div class="t-info">

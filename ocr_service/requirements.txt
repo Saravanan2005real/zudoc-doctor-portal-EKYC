@@ -1,8 +1,0 @@
-Flask
-Flask-CORS
-opencv-python-headless
-numpy
-paddleocr
-pillow
-paddlepaddle
-ultralytics

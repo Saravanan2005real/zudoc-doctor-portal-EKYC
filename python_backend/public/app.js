@@ -534,8 +534,75 @@ function setCheckNode(id, isDone) {
 // -------------------------------------------------------------
 // STEP 4: Real eKYC Evaluation Pipeline (OCR microservice)
 // -------------------------------------------------------------
-function initStep4Pipeline() {}
+function initStep4Pipeline() {
+  const btnStartLiveness = document.getElementById('btn-start-liveness');
+  if (btnStartLiveness) {
+    btnStartLiveness.addEventListener('click', startLivenessCheck);
+  }
+}
 
+let livenessStream = null;
+let livenessInterval = null;
+
+async function startLivenessCheck() {
+  const video = document.getElementById('liveness-video');
+  const overlay = document.getElementById('liveness-overlay');
+  const statusEl = document.getElementById('liveness-status');
+
+  try {
+    livenessStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = livenessStream;
+    overlay.style.display = 'none';
+    statusEl.innerText = 'Status: Please look directly at the camera...';
+    statusEl.className = 'alert alert-info mt-2 text-center';
+
+    livenessInterval = setInterval(checkLivenessFrame, 1500);
+  } catch (err) {
+    statusEl.innerText = 'Status: Webcam access denied or unavailable.';
+    statusEl.className = 'alert alert-danger mt-2 text-center';
+  }
+}
+
+async function checkLivenessFrame() {
+  const video = document.getElementById('liveness-video');
+  const canvas = document.getElementById('liveness-canvas');
+  const ctx = canvas.getContext('2d');
+  
+  if (video.videoWidth === 0) return;
+
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/verification/liveness`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl })
+    });
+
+    const data = await resp.json();
+    const statusEl = document.getElementById('liveness-status');
+
+    if (resp.ok && data.both_eyes_facing) {
+      clearInterval(livenessInterval);
+      if (livenessStream) {
+        livenessStream.getTracks().forEach(track => track.stop());
+      }
+      statusEl.innerText = 'Status: Liveness Verified! Proceeding to Pipeline...';
+      statusEl.className = 'alert alert-success mt-2 text-center';
+      
+      document.getElementById('liveness-section').classList.add('hidden');
+      document.getElementById('pipeline-timeline').classList.remove('hidden');
+      
+      startPipelineAnimation();
+    } else {
+      statusEl.innerText = `Status: ${data.direction || 'No face detected'}. Please look at the camera.`;
+      statusEl.className = 'alert alert-warning mt-2 text-center';
+    }
+  } catch (err) {
+    console.error('Liveness check error:', err);
+  }
+}
 function resetPipelineUI() {
   for (let i = 1; i <= 5; i++) {
     const el = document.getElementById(`tstep-${i}`);

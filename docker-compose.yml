@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      - "8085:8080"
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -22,21 +22,13 @@ services:
       - postgres
       - redis
       - rabbitmq
-      - ocr-service
 
-  ocr-service:
-    build:
-      context: ./ocr_service
-      dockerfile: Dockerfile
-    ports:
-      - "5001:5001"
-    volumes:
-      - ./ocr_service/ocr_uploads:/app/ocr_uploads
+
 
   postgres:
     image: postgres:15-alpine
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=secretpassword
@@ -58,7 +50,7 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "80:80"
+      - "8081:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:

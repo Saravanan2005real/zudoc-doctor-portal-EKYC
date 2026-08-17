@@ -40,6 +40,7 @@ from controllers.admin_controller import router as admin_router
 from controllers.analytics_controller import router as analytics_router
 from controllers.dlq_controller import router as dlq_router
 from controllers.prescription_controller import router as prescription_router
+from controllers.liveness_controller import router as liveness_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASS = os.getenv("DB_PASSWORD", "dinesh_2006")
 DB_NAME = os.getenv("DB_NAME", "doctor_verification_db")
 
-SQLALCHEMY_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 try:
     engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -106,6 +107,7 @@ app.include_router(admin_router)
 app.include_router(analytics_router)
 app.include_router(dlq_router)
 app.include_router(prescription_router)
+app.include_router(liveness_router)
 
 # Mount static files
 os.makedirs("uploads", exist_ok=True)
