@@ -2,6 +2,7 @@ from fastapi import APIRouter, Header, status, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Optional
+import asyncio
 from dependencies import get_db, get_ekyc_evaluation_service
 
 router = APIRouter(prefix="/api/v1/doctors", tags=["ekyc-evaluation"])
@@ -26,7 +27,7 @@ async def evaluate_ekyc(
 
     service = get_ekyc_evaluation_service(db)
     try:
-        result = service.Evaluate(x_doctor_public_id)
+        result = await asyncio.to_thread(service.Evaluate, x_doctor_public_id)
         return result
     except Exception as e:
         return _error(400, str(e))

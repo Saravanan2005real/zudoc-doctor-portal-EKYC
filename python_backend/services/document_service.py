@@ -89,9 +89,10 @@ class DefaultDocumentService(DocumentService):
                     if hasattr(existing_hash_doc.document_type, "value")
                     else str(existing_hash_doc.document_type)
                 )
-                raise Exception(
-                    f"this exact file has already been uploaded as document type '{existing_type}'"
-                )
+                # Same file + same slot: treat as idempotent re-upload, not an error.
+                if existing_type == doc_type:
+                    return self._to_response(existing_hash_doc, doc.public_id)
+                # Same bytes for a different slot (e.g. resume used as degree + registration) is allowed.
 
             new_version = 1
             existing_latest = self.docRepo.FindLatestByDoctorAndType(doc.id, doc_type)

@@ -153,20 +153,26 @@ class FaceEyeEngine:
         except Exception as e:
             print(f"[FaceEyeEngine] MediaPipe unavailable ({e}); using OpenCV fallback")
 
-        cascade_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "data",
-            "haarcascade_frontalface_default.xml",
-        )
-        if not os.path.isfile(cascade_path):
-            # Older OpenCV wheels still ship cascades under cv2.data
+        # Haar is fallback only. OpenCV 5 wheels dropped CascadeClassifier.
+        self.face_cascade = None
+        self._cascade_ok = False
+        if hasattr(cv2, "CascadeClassifier"):
             cascade_path = os.path.join(
-                cv2.data.haarcascades, "haarcascade_frontalface_default.xml"
+                os.path.dirname(os.path.abspath(__file__)),
+                "data",
+                "haarcascade_frontalface_default.xml",
             )
-        self.face_cascade = cv2.CascadeClassifier(cascade_path)
-        self._cascade_ok = not self.face_cascade.empty()
+            if not os.path.isfile(cascade_path):
+                haar_dir = getattr(cv2, "data", None)
+                haar_dir = getattr(haar_dir, "haarcascades", "") if haar_dir else ""
+                cascade_path = os.path.join(haar_dir, "haarcascade_frontalface_default.xml")
+            try:
+                self.face_cascade = cv2.CascadeClassifier(cascade_path)
+                self._cascade_ok = bool(self.face_cascade and not self.face_cascade.empty())
+            except Exception as e:
+                print(f"[FaceEyeEngine] Haar cascade unavailable ({e})")
         if not self._cascade_ok:
-            print("[FaceEyeEngine] Haar cascade missing — OpenCV fallback disabled")
+            print("[FaceEyeEngine] OpenCV Haar fallback disabled (MediaPipe is primary)")
 
     def close(self):
         if self._mp_mesh is not None:

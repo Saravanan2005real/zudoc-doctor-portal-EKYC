@@ -36,6 +36,7 @@ class DocumentRepository:
         return self.db.query(DoctorDocument).filter(
             DoctorDocument.doctor_id == str(doctor_id),
             DoctorDocument.file_hash == file_hash,
+            DoctorDocument.is_latest == True,
         ).first()
 
     def MarkPreviousVersionsNotLatest(self, doctor_id: UUID, doc_type: str) -> None:

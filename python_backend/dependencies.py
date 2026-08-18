@@ -91,7 +91,7 @@ def get_storage_provider():
 def get_file_validator():
     global _file_validator
     if _file_validator is None:
-        _file_validator = FileValidator(10 * 1024 * 1024, 300)
+        _file_validator = FileValidator(25 * 1024 * 1024, 200)
     return _file_validator
 
 

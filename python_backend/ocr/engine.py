@@ -60,42 +60,45 @@ logging.getLogger('ppocr').setLevel(logging.ERROR)
 # Suppress stdout/stderr during heavy imports to keep terminal clean
 import sys, io
 _old_stdout, _old_stderr = sys.stdout, sys.stderr
-sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
-
-import json
-import re
-import uuid
-import cv2
-import numpy as np
-import base64
-from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory, render_template_string
-from flask_cors import CORS
-from PIL import Image
-import paddle
-from paddleocr import PaddleOCR
-
+_sup_out, _sup_err = io.StringIO(), io.StringIO()
+sys.stdout, sys.stderr = _sup_out, _sup_err
 try:
-    from ultralytics import YOLO
-    yolo_model = YOLO('yolov8n.pt') # Placeholder for document detection model
-except Exception as e:
-    # Suppress YOLO load error output to keep logs clean
-    yolo_model = None
+    import json
+    import re
+    import uuid
+    import cv2
+    import numpy as np
+    import base64
+    from datetime import datetime
+    from flask import Flask, request, jsonify, send_from_directory, render_template_string
+    from flask_cors import CORS
+    from PIL import Image
+    import paddle
+    from paddleocr import PaddleOCR
 
-try:
-    from retinaface import RetinaFace
-except Exception as e:
-    print(f"RetinaFace load failed: {e}")
-    RetinaFace = None
+    try:
+        from ultralytics import YOLO
+        yolo_model = YOLO('yolov8n.pt') # Placeholder for document detection model
+    except Exception:
+        yolo_model = None
 
-try:
-    from deepface import DeepFace
-except Exception as e:
-    print(f"DeepFace load failed: {e}")
-    DeepFace = None
+    try:
+        from retinaface import RetinaFace
+    except Exception as e:
+        RetinaFace = None
+        _sup_err.write(f"RetinaFace load failed: {e}\n")
 
-# Restore stdout/stderr
-sys.stdout, sys.stderr = _old_stdout, _old_stderr
+    try:
+        from deepface import DeepFace
+    except Exception as e:
+        DeepFace = None
+        _sup_err.write(f"DeepFace load failed: {e}\n")
+finally:
+    sys.stdout, sys.stderr = _old_stdout, _old_stderr
+    captured = (_sup_err.getvalue() or "") + (_sup_out.getvalue() or "")
+    fatal = any(k in captured.lower() for k in ("traceback", "error:", "exception"))
+    if fatal:
+        print(captured[-4000:], file=sys.stderr)
 
 # Suppress paddlex logger
 import logging
@@ -1000,13 +1003,31 @@ def check_image_quality(img_np):
         brightness_status = "OVEREXPOSED"
 
     # 4. Face Detection (Visible, Not Cropped, Not Too Small)
-    # Load OpenCV's pre-trained Haar cascade for frontal face
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
     face_visible = False
     face_not_cropped = True
     face_not_too_small = True
+    faces = []
+    if hasattr(cv2, "CascadeClassifier"):
+        haar_path = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "eye_tracking",
+            "fgi_eye_tracker",
+            "data",
+            "haarcascade_frontalface_default.xml",
+        )
+        haar_path = os.path.abspath(haar_path)
+        if not os.path.isfile(haar_path):
+            haar_dir = getattr(getattr(cv2, "data", None), "haarcascades", "") or ""
+            haar_path = os.path.join(haar_dir, "haarcascade_frontalface_default.xml")
+        try:
+            face_cascade = cv2.CascadeClassifier(haar_path)
+            if not face_cascade.empty():
+                faces = face_cascade.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+                )
+        except Exception:
+            faces = []
 
     if len(faces) > 0:
         face_visible = True
@@ -1652,7 +1673,12 @@ def parse_pan_text(text_lines):
 
 # Unified entry point: detects whether the document is Aadhaar or PAN and
 # dispatches to the appropriate field parser.
-def parse_id_document(text_lines):
+def parse_id_document(text_lines, hinted_type=None):
+    hint = (hinted_type or "").upper()
+    if hint == "PAN":
+        return parse_pan_text(text_lines)
+    if hint == "AADHAAR":
+        return parse_aadhaar_text(text_lines)
     doc_type = detect_document_type(text_lines)
     if doc_type == "PAN":
         return parse_pan_text(text_lines)
@@ -1713,16 +1739,16 @@ def _score_ocr_parse(parsed_fields, avg_confidence, text_lines):
     return score
 
 
-def run_paddle_ocr_on_image(img_np, tmp_path):
+def run_paddle_ocr_on_image(img_np, tmp_path, hinted_type=None):
     cv2.imwrite(tmp_path, img_np)
     ocr_result = ocr.ocr(tmp_path)
     lines, scores = _extract_paddle_lines(ocr_result)
     avg_conf = float(np.mean(scores)) if scores else 0.0
-    parsed = parse_id_document(lines)
+    parsed = parse_id_document(lines, hinted_type=hinted_type)
     return lines, scores, avg_conf, parsed
 
 
-def best_ocr_pass(warped_img, upload_folder, filename_stem):
+def best_ocr_pass(warped_img, upload_folder, filename_stem, hinted_type=None):
     """
     Try mild enhance first, fall back to raw warp if parse quality is weak.
     For Aadhaar, refine the UID with a lower-band ROI OCR so digits aren't
@@ -1734,7 +1760,7 @@ def best_ocr_pass(warped_img, upload_folder, filename_stem):
     for label, img in candidates:
         tmp = os.path.join(upload_folder, f"_ocr_tmp_{label}_{filename_stem}.jpg")
         try:
-            lines, scores, avg_conf, parsed = run_paddle_ocr_on_image(img, tmp)
+            lines, scores, avg_conf, parsed = run_paddle_ocr_on_image(img, tmp, hinted_type=hinted_type)
             rank = _score_ocr_parse(parsed, avg_conf, lines)
             print(f"[OCR pass={label}] conf={avg_conf:.3f} rank={rank:.3f} parsed={parsed}")
             item = (rank, label, img, lines, scores, avg_conf, parsed)
@@ -1763,7 +1789,7 @@ def best_ocr_pass(warped_img, upload_folder, filename_stem):
 
     if best is None:
         empty = enhance_image_for_ocr(warped_img)
-        return empty, [], [], 0.0, parse_id_document([]), "mild"
+        return empty, [], [], 0.0, parse_id_document([], hinted_type=hinted_type), "mild"
 
     _, label, img, lines, scores, avg_conf, parsed = best
     parsed = dict(parsed or {})
@@ -1795,6 +1821,53 @@ def best_ocr_pass(warped_img, upload_folder, filename_stem):
             parsed["aadhaar_number_validated"] = validate_verhoeff(full_num)
 
     return img, lines, scores, avg_conf, parsed, label
+
+def load_cv_image(file_path: str):
+    """Load JPG/PNG/PDF into a BGR numpy image. cv2.imread fails on Windows paths with spaces."""
+    path = os.path.abspath(file_path)
+    ext = os.path.splitext(path)[1].lower()
+
+    if ext == ".pdf":
+        try:
+            import fitz
+            doc = fitz.open(path)
+            page = doc[0]
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            doc.close()
+            if pix.n == 3:
+                return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            if pix.n == 4:
+                return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            return arr
+        except Exception as e:
+            print(f"PDF render failed: {e}")
+            return None
+
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if img is not None:
+            return img
+    except Exception:
+        pass
+
+    img = cv2.imread(path)
+    if img is not None:
+        return img
+
+    try:
+        with Image.open(path) as pil:
+            rgb = pil.convert("RGB")
+            return cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
+@app.route('/health')
+def ocr_health():
+    return jsonify({"status": "ok", "service": "ocr"})
+
 
 @app.route('/')
 def index():
@@ -1880,12 +1953,12 @@ def run_ocr():
     filename = f"{uuid.uuid4()}_{file.filename}"
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(file_path)
+    hinted_type = (request.form.get("document_type") or "").strip().upper() or None
 
     try:
-        # Load image using OpenCV
-        img = cv2.imread(file_path)
+        img = load_cv_image(file_path)
         if img is None:
-            return jsonify({"error": "Invalid image format"}), 400
+            return jsonify({"error": "Invalid image or PDF format"}), 400
 
         # Step 1: Quality Check
         quality_report = check_image_quality(img)
@@ -1904,7 +1977,7 @@ def run_ocr():
         # Step 4: OCR-safe enhance + dual-pass PaddleOCR (mild vs raw)
         stem = os.path.splitext(filename)[0]
         processed_img, extracted_lines, confidence_scores, avg_confidence, parsed_fields, ocr_pass = best_ocr_pass(
-            warped_img, app.config['UPLOAD_FOLDER'], stem
+            warped_img, app.config['UPLOAD_FOLDER'], stem, hinted_type=hinted_type
         )
 
         # Save the pipeline image used for the winning OCR pass

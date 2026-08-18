@@ -91,6 +91,14 @@ window.goToStep = function(stepNum) {
   }
 
   window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  if (stepNum === 4) {
+    if (!livenessActive && !livenessStarting) {
+      beginStep4Liveness();
+    }
+  } else {
+    stopLivenessCamera();
+  }
 };
 
 // -------------------------------------------------------------
@@ -426,7 +434,10 @@ function initStep3Vault() {
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'Upload failed');
 
-      state.uploadedDocuments.push(data);
+      if (!state.uploadedDocuments.some((d) => d.document_id === data.document_id)) {
+        state.uploadedDocuments.push(data);
+      }
+      fileInput.value = '';
 
       if (docType === 'REGISTRATION_CERTIFICATE') state.checklist.regCertUploaded = true;
       if (docType === 'MEDICAL_DEGREE_CERTIFICATE') state.checklist.degreeCertUploaded = true;
@@ -455,11 +466,8 @@ function initStep3Vault() {
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'Submission failed');
 
-      alert('Verification Application Submitted Successfully! Transitioning to Step 4 (Live Pipeline)...');
-      
-      // AUTO-MOVE TO STEP 4
+      alert('Verification Application Submitted Successfully! Transitioning to Step 4 (Liveness + eKYC)...');
       goToStep(4);
-      startPipelineAnimation();
     } catch (err) {
       alert(`Submission Error: ${err.message}`);
     }
@@ -534,7 +542,228 @@ function setCheckNode(id, isDone) {
 // -------------------------------------------------------------
 // STEP 4: Real eKYC Evaluation Pipeline (OCR microservice)
 // -------------------------------------------------------------
-function initStep4Pipeline() {}
+function initStep4Pipeline() {
+  const btnStartLiveness = document.getElementById('btn-start-liveness');
+  if (btnStartLiveness) {
+    btnStartLiveness.addEventListener('click', startLivenessCheck);
+  }
+}
+
+let livenessStream = null;
+let livenessTimer = null;
+let livenessInFlight = false;
+let livenessActive = false;
+let livenessStarting = false;
+let livenessHits = 0;
+let livenessGen = 0;
+let livenessResetPending = true;
+let pipelineRunning = false;
+const LIVENESS_NEEDED = 6;
+
+function setLivenessProgress(hits) {
+  const bar = document.getElementById('liveness-progress');
+  if (bar) bar.style.width = `${Math.min(100, (hits / LIVENESS_NEEDED) * 100)}%`;
+}
+
+function stopLivenessCamera() {
+  livenessActive = false;
+  livenessStarting = false;
+  livenessInFlight = false;
+  if (livenessTimer) {
+    clearTimeout(livenessTimer);
+    livenessTimer = null;
+  }
+  if (livenessStream) {
+    livenessStream.getTracks().forEach((track) => track.stop());
+    livenessStream = null;
+  }
+  const video = document.getElementById('liveness-video');
+  if (video) video.srcObject = null;
+}
+
+function resetLivenessUI() {
+  stopLivenessCamera();
+  livenessHits = 0;
+  livenessResetPending = true;
+  setLivenessProgress(0);
+  const section = document.getElementById('liveness-section');
+  const overlay = document.getElementById('liveness-overlay');
+  const timeline = document.getElementById('pipeline-timeline');
+  const statusEl = document.getElementById('liveness-status');
+  if (section) section.classList.remove('hidden');
+  if (overlay) overlay.style.display = 'flex';
+  if (timeline) timeline.classList.add('hidden');
+  if (statusEl) {
+    statusEl.innerText = 'Status: Starting webcam... look at the camera and hold still.';
+    statusEl.className = 'alert alert-info mt-2 text-center';
+  }
+}
+
+function beginStep4Liveness() {
+  resetPipelineUI();
+  resetLivenessUI();
+  startLivenessCheck();
+}
+window.beginStep4Liveness = beginStep4Liveness;
+
+function scheduleLivenessTick(gen, delayMs) {
+  if (livenessTimer) {
+    clearTimeout(livenessTimer);
+    livenessTimer = null;
+  }
+  livenessTimer = setTimeout(() => checkLivenessFrame(gen), delayMs);
+}
+
+function drawLivenessOverlay(data) {
+  const canvas = document.getElementById('liveness-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!data) return;
+
+  const facing = !!data.both_eyes_facing;
+  ctx.strokeStyle = facing ? '#22c55e' : '#f59e0b';
+  ctx.lineWidth = 3;
+  const box = data.face_box;
+  if (Array.isArray(box) && box.length === 4) {
+    const [x1, y1, x2, y2] = box;
+    ctx.strokeRect(x1, y1, Math.max(1, x2 - x1), Math.max(1, y2 - y1));
+  }
+  ctx.fillStyle = facing ? '#22c55e' : '#f59e0b';
+  ctx.font = '16px sans-serif';
+  ctx.fillText(
+    facing
+      ? `Tracking: ${data.direction || 'center'}  (${livenessHits}/${LIVENESS_NEEDED})`
+      : `${data.direction || 'no_face'} — face the camera`,
+    12,
+    28
+  );
+}
+
+async function startLivenessCheck() {
+  const video = document.getElementById('liveness-video');
+  const overlay = document.getElementById('liveness-overlay');
+  const statusEl = document.getElementById('liveness-status');
+  if (!video || !statusEl) return;
+  if (livenessStarting) return;
+
+  const gen = ++livenessGen;
+  livenessStarting = true;
+  livenessHits = 0;
+  livenessResetPending = true;
+  setLivenessProgress(0);
+
+  if (livenessTimer) {
+    clearTimeout(livenessTimer);
+    livenessTimer = null;
+  }
+  if (livenessStream) {
+    livenessStream.getTracks().forEach((track) => track.stop());
+    livenessStream = null;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    if (gen !== livenessGen) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    livenessStream = stream;
+    video.srcObject = stream;
+    video.muted = true;
+    video.setAttribute('playsinline', 'true');
+    await video.play();
+    if (gen !== livenessGen) return;
+
+    if (overlay) overlay.style.display = 'none';
+    statusEl.innerText = 'Status: Camera on. Look straight at the lens with both eyes visible.';
+    statusEl.className = 'alert alert-info mt-2 text-center';
+    livenessActive = true;
+    livenessStarting = false;
+    // Wait for real frames before the first OCR-style poll so a blank frame cannot "pass".
+    scheduleLivenessTick(gen, 1500);
+  } catch (err) {
+    if (gen !== livenessGen) return;
+    livenessStarting = false;
+    livenessActive = false;
+    statusEl.innerText = 'Status: Webcam access denied or unavailable.';
+    statusEl.className = 'alert alert-danger mt-2 text-center';
+  }
+}
+
+async function checkLivenessFrame(gen) {
+  if (gen !== livenessGen || livenessInFlight || !livenessActive) return;
+
+  const video = document.getElementById('liveness-video');
+  const overlayCanvas = document.getElementById('liveness-canvas');
+  const statusEl = document.getElementById('liveness-status');
+  if (!video || !overlayCanvas || video.readyState < 2 || video.videoWidth === 0) {
+    scheduleLivenessTick(gen, 400);
+    return;
+  }
+
+  const capture = document.createElement('canvas');
+  capture.width = overlayCanvas.width;
+  capture.height = overlayCanvas.height;
+  capture.getContext('2d').drawImage(video, 0, 0, capture.width, capture.height);
+  const dataUrl = capture.toDataURL('image/jpeg', 0.8);
+
+  livenessInFlight = true;
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/verification/liveness`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl, reset: livenessResetPending })
+    });
+    livenessResetPending = false;
+
+    const data = await resp.json().catch(() => ({}));
+    if (gen !== livenessGen || !livenessActive) return;
+
+    drawLivenessOverlay(data);
+
+    const facing = resp.ok && data.both_eyes_facing === true;
+    if (facing) {
+      livenessHits += 1;
+      setLivenessProgress(livenessHits);
+      if (statusEl) {
+        statusEl.innerText = `Status: Both eyes visible (${data.direction || 'center'}). Hold still ${livenessHits}/${LIVENESS_NEEDED}...`;
+        statusEl.className = 'alert alert-success mt-2 text-center';
+      }
+      if (livenessHits >= LIVENESS_NEEDED) {
+        livenessActive = false;
+        if (livenessStream) {
+          livenessStream.getTracks().forEach((track) => track.stop());
+          livenessStream = null;
+        }
+        if (statusEl) {
+          statusEl.innerText = 'Status: Liveness verified. Running eKYC OCR...';
+        }
+        const timeline = document.getElementById('pipeline-timeline');
+        if (timeline) timeline.classList.remove('hidden');
+        startPipelineAnimation();
+        return;
+      }
+    } else if (statusEl) {
+      livenessHits = 0;
+      setLivenessProgress(0);
+      const hint = data.detail || data.direction || data.error || 'No face detected';
+      statusEl.innerText = `Status: ${hint}. Keep both eyes in view.`;
+      statusEl.className = 'alert alert-warning mt-2 text-center';
+    }
+  } catch (err) {
+    console.error('Liveness check error:', err);
+  } finally {
+    livenessInFlight = false;
+    if (gen === livenessGen && livenessActive) {
+      scheduleLivenessTick(gen, 450);
+    }
+  }
+}
 
 function resetPipelineUI() {
   for (let i = 1; i <= 5; i++) {
@@ -571,13 +800,20 @@ function activateStage(stageId, status, detail) {
 function renderEkycResults(documents) {
   const panel = document.getElementById('ekyc-result-panel');
   const cards = document.getElementById('ekyc-result-cards');
-  if (!documents || documents.length === 0) return;
+  if (!panel || !cards) return;
+
+  if (!documents || documents.length === 0) {
+    cards.innerHTML = `<div class="text-muted">No OCR fields returned. Confirm the OCR service is running on port 5001 and the Aadhaar/PAN images are readable.</div>`;
+    panel.classList.remove('hidden');
+    return;
+  }
 
   cards.innerHTML = documents.map((doc) => {
     const fields = doc.parsed_fields || {};
     const docType = fields.document_type || doc.document_type || 'UNKNOWN';
     const idNum = fields.aadhaar_number || fields.pan_number || '-';
     const validated = fields.aadhaar_number_validated || fields.pan_number_validated;
+    const raw = Array.isArray(doc.raw_text) ? doc.raw_text.filter(Boolean).slice(0, 8).join(' | ') : '';
     const faceHtml = doc.face_image_url
       ? `<img src="${doc.face_image_url}" alt="face" style="width:96px;height:96px;object-fit:cover;border-radius:8px;margin-top:8px;" />`
       : '<div class="text-muted">No face crop</div>';
@@ -592,6 +828,8 @@ function renderEkycResults(documents) {
           ${validated === false ? '<span class="badge badge-danger">INVALID</span>' : ''}
         </p>
         <p style="margin:0.25rem 0;"><strong>OCR Confidence:</strong> ${doc.ocr_confidence ?? '-'}%</p>
+        ${doc.error ? `<p style="margin:0.25rem 0;color:#ef4444;"><strong>Error:</strong> ${doc.error}</p>` : ''}
+        ${(!fields.name && raw) ? `<p class="text-muted" style="margin:0.25rem 0;font-size:0.8rem;"><strong>OCR text:</strong> ${raw}</p>` : ''}
         ${faceHtml}
       </div>`;
   }).join('');
@@ -604,6 +842,8 @@ async function startPipelineAnimation() {
     alert('Please complete registration first.');
     return;
   }
+  if (pipelineRunning) return;
+  pipelineRunning = true;
 
   resetPipelineUI();
   activateStage(1, 'done', 'Verification package submitted');
@@ -666,6 +906,8 @@ async function startPipelineAnimation() {
     badge.className = 'badge badge-danger';
     logPipe(`[ERROR] ${err.message}`);
     logPipe('[HINT] Make sure OCR service is running on http://127.0.0.1:5001');
+  } finally {
+    pipelineRunning = false;
   }
 }
 

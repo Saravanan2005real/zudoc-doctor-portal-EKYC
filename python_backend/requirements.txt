@@ -16,10 +16,12 @@ twilio
 redis
 pika
 python-dotenv
-opencv-python>=4.8
+flask
+flask-cors
+opencv-contrib-python==4.10.0.84
 paddleocr
 pillow
 paddlepaddle
 ultralytics
 torch>=2.1
-mediapipe
+mediapipe==0.10.14

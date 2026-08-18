@@ -19,6 +19,8 @@ Thumbs.db
 uploads/
 python_backend/uploads/
 ocr_service/ocr_uploads/
+python_backend/ocr_uploads/
+python_backend/ocr_service.log
 **/_ocr_tmp_*.jpg
 **/_aadhaar_roi_*.jpg
 

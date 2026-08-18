@@ -116,9 +116,48 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 os.makedirs("public", exist_ok=True)
 app.mount("/", StaticFiles(directory="public", html=True), name="public")
 
+
+def _ocr_already_running() -> bool:
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:5001/health", timeout=2) as resp:
+            return resp.status < 500
+    except Exception:
+        try:
+            import urllib.request
+            with urllib.request.urlopen("http://127.0.0.1:5001/", timeout=2) as resp:
+                return resp.status < 500
+        except Exception:
+            return False
+
+
+def _ensure_ocr_process():
+    """OCR must stay in a separate process (it mocks torch for Paddle)."""
+    if _ocr_already_running():
+        logger.info("[OCR] Microservice already running on http://127.0.0.1:5001")
+        return
+    import subprocess
+    import sys
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    logger.info("[OCR] Starting OCR microservice on port 5001...")
+    log_path = os.path.join(backend_dir, "ocr_service.log")
+    log_file = open(log_path, "a", encoding="utf-8")
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen(
+        [sys.executable, "-m", "ocr.engine"],
+        cwd=backend_dir,
+        stdout=log_file,
+        stderr=log_file,
+        creationflags=creationflags,
+    )
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
-    
+    _ensure_ocr_process()
+
     logger.info("=======================================================")
     logger.info("Starting Enterprise Doctor Verification Service v1.0.0")
     logger.info("=======================================================")

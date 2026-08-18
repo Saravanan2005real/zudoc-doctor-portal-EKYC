@@ -18,7 +18,7 @@ class FileValidationResult:
         self.height = height
 
 class FileValidator:
-    def __init__(self, max_size_bytes: int = 10 * 1024 * 1024, min_image_dimension: int = 300):
+    def __init__(self, max_size_bytes: int = 25 * 1024 * 1024, min_image_dimension: int = 200):
         self.max_size_bytes = max_size_bytes if max_size_bytes > 0 else 10 * 1024 * 1024
         self.min_image_dimension = min_image_dimension if min_image_dimension > 0 else 300
 
