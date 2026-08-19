@@ -413,21 +413,43 @@
             <span class="badge badge-warning" id="pipeline-status-badge">QUEUED</span>
           </div>
 
-          <!-- Liveness Check Section -->
-          <div class="liveness-section mt-4" id="liveness-section">
-            <h3>👁️ Step 4.1: Liveness Check (Eye Tracking)</h3>
-            <p class="subtitle">Keep the webcam open, face the camera, and hold both eyes visible until the progress bar fills.</p>
-            <div class="video-container" style="text-align: center; position: relative; width: 480px; margin: 0 auto;">
-              <video id="liveness-video" width="480" height="360" autoplay muted playsinline style="border-radius: 8px; border: 2px solid var(--border-color); background:#111; width:480px; height:360px; object-fit:cover;"></video>
-              <canvas id="liveness-canvas" width="480" height="360" style="position:absolute; left:0; top:0; width:480px; height:360px; pointer-events:none; border-radius:8px;"></canvas>
-              <div id="liveness-overlay" style="position: absolute; top: 0; left: 0; width: 480px; height: 360px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); border-radius: 8px;">
-                <button class="btn btn-primary btn-lg" id="btn-start-liveness" type="button">Start Webcam</button>
+          <!-- Module 1: Document Face Capture -->
+          <div class="mt-4" id="doc-face-section">
+            <h3>📸 Step 4.1: Document Face Capture</h3>
+            <p class="subtitle">Hold your Aadhaar or PAN card in front of the camera so we can extract the face photo from the document.</p>
+            <div style="text-align:center; position:relative; width:520px; margin:0 auto;">
+              <video id="doc-face-video" width="520" height="390" autoplay muted playsinline style="border-radius:8px; border:2px solid var(--border-color); background:#111; width:520px; height:390px; object-fit:cover;"></video>
+              <canvas id="doc-face-canvas" width="520" height="390" style="position:absolute; left:0; top:0; width:520px; height:390px; pointer-events:none; border-radius:8px;"></canvas>
+              <div id="doc-face-overlay" style="position:absolute; top:0; left:0; width:520px; height:390px; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.5); border-radius:8px;">
+                <button class="btn btn-primary btn-lg" id="btn-start-doc-face" type="button">Start Camera</button>
               </div>
             </div>
-            <div class="progress mt-2" style="height:8px; background:rgba(255,255,255,0.12); border-radius:999px; overflow:hidden;">
-              <div id="liveness-progress" style="height:100%; width:0%; background:#22c55e; transition:width 0.2s;"></div>
+            <div id="doc-face-result" class="mt-2 hidden" style="text-align:center;">
+              <img id="doc-face-img" style="width:112px; height:112px; object-fit:cover; border-radius:12px; border:3px solid #22c55e;" />
+              <p class="text-muted mt-1">Face extracted from document</p>
             </div>
-            <div class="alert alert-info mt-2 text-center" id="liveness-status">Status: Waiting for webcam...</div>
+            <div class="alert alert-info mt-2 text-center" id="doc-face-status">Status: Waiting for camera...</div>
+          </div>
+
+          <!-- Module 2: Pupil Tracking with 5 Red Dots -->
+          <div class="mt-4 hidden" id="dot-tracking-section">
+            <h3>👁️ Step 4.2: Live Pupil Tracking (5-Dot Challenge)</h3>
+            <p class="subtitle">Follow the red dots with your eyes. Look directly at each dot as it appears.</p>
+            <div style="display:flex; gap:1rem; justify-content:center; align-items:flex-start; flex-wrap:wrap;">
+              <div style="position:relative; width:520px; height:390px;">
+                <video id="dot-track-video" width="520" height="390" autoplay muted playsinline style="border-radius:8px; border:2px solid var(--border-color); background:#111; width:520px; height:390px; object-fit:cover;"></video>
+                <canvas id="dot-track-overlay" width="520" height="390" style="position:absolute; left:0; top:0; width:520px; height:390px; pointer-events:none; border-radius:8px;"></canvas>
+              </div>
+              <canvas id="dot-challenge-canvas" width="360" height="360" style="border-radius:12px; border:2px solid var(--border-color); background:#0d0f14;"></canvas>
+            </div>
+            <div class="mt-2" style="text-align:center;">
+              <span class="badge badge-info" id="dot-progress-label">Dot 0 / 5</span>
+              <span class="badge badge-secondary" id="dot-direction-label">—</span>
+            </div>
+            <div class="progress mt-2" style="height:8px; background:rgba(255,255,255,0.12); border-radius:999px; overflow:hidden;">
+              <div id="dot-progress-bar" style="height:100%; width:0%; background:#ef4444; transition:width 0.3s;"></div>
+            </div>
+            <div class="alert alert-info mt-2 text-center" id="dot-track-status">Status: Preparing dot challenge...</div>
           </div>
 
           <div class="status-timeline mt-4 hidden" id="pipeline-timeline">
@@ -480,8 +502,8 @@
           <div class="page-footer flex-between mt-4">
             <button class="btn btn-outline" onclick="goToStep(3)">⬅ Back to Step 3</button>
             <div style="display:flex; gap:0.75rem; align-items:center;">
-              <button class="btn btn-outline" id="btn-retry-ekyc" onclick="beginStep4Liveness()">
-                🔄 Re-run Liveness + eKYC
+              <button class="btn btn-outline" id="btn-retry-ekyc" onclick="beginStep4()">
+                🔄 Re-run Full eKYC
               </button>
               <button class="btn btn-success btn-lg hidden" id="btn-goto-prescription" onclick="goToStep(5)">
                 Unlock & Open Digital Prescription Studio (Step 5) ➔

@@ -93,11 +93,9 @@ window.goToStep = function(stepNum) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 
   if (stepNum === 4) {
-    if (!livenessActive && !livenessStarting) {
-      beginStep4Liveness();
-    }
+    beginStep4();
   } else {
-    stopLivenessCamera();
+    stopS4Camera();
   }
 };
 
@@ -540,230 +538,333 @@ function setCheckNode(id, isDone) {
 }
 
 // -------------------------------------------------------------
-// STEP 4: Real eKYC Evaluation Pipeline (OCR microservice)
+// STEP 4: Two-Module eKYC Verification
+//   Module 1 — Document Face Capture (hold Aadhaar/PAN to camera)
+//   Module 2 — Pupil Tracking with 5 Red Dots
+//   Then → OCR Pipeline on uploaded documents
 // -------------------------------------------------------------
-function initStep4Pipeline() {
-  const btnStartLiveness = document.getElementById('btn-start-liveness');
-  if (btnStartLiveness) {
-    btnStartLiveness.addEventListener('click', startLivenessCheck);
-  }
-}
-
-let livenessStream = null;
-let livenessTimer = null;
-let livenessInFlight = false;
-let livenessActive = false;
-let livenessStarting = false;
-let livenessHits = 0;
-let livenessGen = 0;
-let livenessResetPending = true;
+let s4Stream = null;
+let s4Timer = null;
+let s4Gen = 0;
+let s4Active = false;
+let s4InFlight = false;
 let pipelineRunning = false;
-const LIVENESS_NEEDED = 6;
 
-function setLivenessProgress(hits) {
-  const bar = document.getElementById('liveness-progress');
-  if (bar) bar.style.width = `${Math.min(100, (hits / LIVENESS_NEEDED) * 100)}%`;
+const DOT_POSITIONS = [
+  { label: 'center', x: 0.5, y: 0.5 },
+  { label: 'left',   x: 0.15, y: 0.5 },
+  { label: 'right',  x: 0.85, y: 0.5 },
+  { label: 'top',    x: 0.5, y: 0.15 },
+  { label: 'bottom', x: 0.5, y: 0.85 },
+];
+
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
-function stopLivenessCamera() {
-  livenessActive = false;
-  livenessStarting = false;
-  livenessInFlight = false;
-  if (livenessTimer) {
-    clearTimeout(livenessTimer);
-    livenessTimer = null;
-  }
-  if (livenessStream) {
-    livenessStream.getTracks().forEach((track) => track.stop());
-    livenessStream = null;
-  }
-  const video = document.getElementById('liveness-video');
-  if (video) video.srcObject = null;
+function stopS4Camera() {
+  s4Active = false;
+  s4InFlight = false;
+  if (s4Timer) { clearTimeout(s4Timer); s4Timer = null; }
+  if (s4Stream) { s4Stream.getTracks().forEach(t => t.stop()); s4Stream = null; }
+  ['doc-face-video', 'dot-track-video'].forEach(id => {
+    const v = document.getElementById(id); if (v) v.srcObject = null;
+  });
 }
 
-function resetLivenessUI() {
-  stopLivenessCamera();
-  livenessHits = 0;
-  livenessResetPending = true;
-  setLivenessProgress(0);
-  const section = document.getElementById('liveness-section');
-  const overlay = document.getElementById('liveness-overlay');
-  const timeline = document.getElementById('pipeline-timeline');
-  const statusEl = document.getElementById('liveness-status');
-  if (section) section.classList.remove('hidden');
-  if (overlay) overlay.style.display = 'flex';
-  if (timeline) timeline.classList.add('hidden');
-  if (statusEl) {
-    statusEl.innerText = 'Status: Starting webcam... look at the camera and hold still.';
-    statusEl.className = 'alert alert-info mt-2 text-center';
-  }
+async function openCamera(videoEl) {
+  if (s4Stream) { s4Stream.getTracks().forEach(t => t.stop()); s4Stream = null; }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
+  });
+  s4Stream = stream;
+  videoEl.srcObject = stream;
+  videoEl.muted = true;
+  videoEl.setAttribute('playsinline', 'true');
+  await videoEl.play();
+  return stream;
 }
 
-function beginStep4Liveness() {
-  resetPipelineUI();
-  resetLivenessUI();
-  startLivenessCheck();
-}
-window.beginStep4Liveness = beginStep4Liveness;
-
-function scheduleLivenessTick(gen, delayMs) {
-  if (livenessTimer) {
-    clearTimeout(livenessTimer);
-    livenessTimer = null;
-  }
-  livenessTimer = setTimeout(() => checkLivenessFrame(gen), delayMs);
+function grabFrame(videoEl, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(videoEl, 0, 0, w, h);
+  return c.toDataURL('image/jpeg', 0.8);
 }
 
-function drawLivenessOverlay(data) {
-  const canvas = document.getElementById('liveness-canvas');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!data) return;
-
-  const facing = !!data.both_eyes_facing;
-  ctx.strokeStyle = facing ? '#22c55e' : '#f59e0b';
-  ctx.lineWidth = 3;
-  const box = data.face_box;
-  if (Array.isArray(box) && box.length === 4) {
-    const [x1, y1, x2, y2] = box;
-    ctx.strokeRect(x1, y1, Math.max(1, x2 - x1), Math.max(1, y2 - y1));
-  }
-  ctx.fillStyle = facing ? '#22c55e' : '#f59e0b';
-  ctx.font = '16px sans-serif';
-  ctx.fillText(
-    facing
-      ? `Tracking: ${data.direction || 'center'}  (${livenessHits}/${LIVENESS_NEEDED})`
-      : `${data.direction || 'no_face'} — face the camera`,
-    12,
-    28
-  );
+function initStep4Pipeline() {
+  document.getElementById('btn-start-doc-face')?.addEventListener('click', startModule1);
 }
 
-async function startLivenessCheck() {
-  const video = document.getElementById('liveness-video');
-  const overlay = document.getElementById('liveness-overlay');
-  const statusEl = document.getElementById('liveness-status');
-  if (!video || !statusEl) return;
-  if (livenessStarting) return;
-
-  const gen = ++livenessGen;
-  livenessStarting = true;
-  livenessHits = 0;
-  livenessResetPending = true;
-  setLivenessProgress(0);
-
-  if (livenessTimer) {
-    clearTimeout(livenessTimer);
-    livenessTimer = null;
-  }
-  if (livenessStream) {
-    livenessStream.getTracks().forEach((track) => track.stop());
-    livenessStream = null;
-  }
-
+// --- Module 1: Document Face Capture ---
+async function startModule1() {
+  const gen = ++s4Gen;
+  const video = document.getElementById('doc-face-video');
+  const overlay = document.getElementById('doc-face-overlay');
+  const statusEl = document.getElementById('doc-face-status');
+  const resultDiv = document.getElementById('doc-face-result');
+  if (resultDiv) resultDiv.classList.add('hidden');
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-      audio: false,
-    });
-    if (gen !== livenessGen) {
-      stream.getTracks().forEach((track) => track.stop());
-      return;
-    }
-
-    livenessStream = stream;
-    video.srcObject = stream;
-    video.muted = true;
-    video.setAttribute('playsinline', 'true');
-    await video.play();
-    if (gen !== livenessGen) return;
-
+    await openCamera(video);
+    if (gen !== s4Gen) return;
     if (overlay) overlay.style.display = 'none';
-    statusEl.innerText = 'Status: Camera on. Look straight at the lens with both eyes visible.';
+    statusEl.innerText = 'Status: Camera on. Hold your Aadhaar/PAN card in view...';
     statusEl.className = 'alert alert-info mt-2 text-center';
-    livenessActive = true;
-    livenessStarting = false;
-    // Wait for real frames before the first OCR-style poll so a blank frame cannot "pass".
-    scheduleLivenessTick(gen, 1500);
+    s4Active = true;
+    scheduleDocFaceTick(gen, 1200);
   } catch (err) {
-    if (gen !== livenessGen) return;
-    livenessStarting = false;
-    livenessActive = false;
-    statusEl.innerText = 'Status: Webcam access denied or unavailable.';
+    statusEl.innerText = 'Status: Webcam access denied.';
     statusEl.className = 'alert alert-danger mt-2 text-center';
   }
 }
 
-async function checkLivenessFrame(gen) {
-  if (gen !== livenessGen || livenessInFlight || !livenessActive) return;
+function scheduleDocFaceTick(gen, ms) {
+  if (s4Timer) clearTimeout(s4Timer);
+  s4Timer = setTimeout(() => pollDocFace(gen), ms);
+}
 
-  const video = document.getElementById('liveness-video');
-  const overlayCanvas = document.getElementById('liveness-canvas');
-  const statusEl = document.getElementById('liveness-status');
-  if (!video || !overlayCanvas || video.readyState < 2 || video.videoWidth === 0) {
-    scheduleLivenessTick(gen, 400);
-    return;
+async function pollDocFace(gen) {
+  if (gen !== s4Gen || !s4Active || s4InFlight) return;
+  const video = document.getElementById('doc-face-video');
+  const statusEl = document.getElementById('doc-face-status');
+  const canvas = document.getElementById('doc-face-canvas');
+  if (!video || video.readyState < 2 || video.videoWidth === 0) {
+    scheduleDocFaceTick(gen, 400); return;
   }
+  const dataUrl = grabFrame(video, 520, 390);
+  s4InFlight = true;
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/verification/capture-doc-face`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (gen !== s4Gen || !s4Active) return;
 
-  const capture = document.createElement('canvas');
-  capture.width = overlayCanvas.width;
-  capture.height = overlayCanvas.height;
-  capture.getContext('2d').drawImage(video, 0, 0, capture.width, capture.height);
-  const dataUrl = capture.toDataURL('image/jpeg', 0.8);
+    const ctx = canvas?.getContext('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (data.face_detected && data.face_box) {
+        const [x1, y1, x2, y2] = data.face_box;
+        ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 3;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.fillStyle = '#22c55e'; ctx.font = '14px sans-serif';
+        ctx.fillText('Face detected on document', x1, Math.max(16, y1 - 6));
+      }
+    }
 
-  livenessInFlight = true;
+    if (resp.ok && data.face_detected && data.face_image) {
+      stopS4Camera();
+      statusEl.innerText = 'Status: Face extracted from document! Proceeding to pupil tracking...';
+      statusEl.className = 'alert alert-success mt-2 text-center';
+      const resultDiv = document.getElementById('doc-face-result');
+      const img = document.getElementById('doc-face-img');
+      if (img) img.src = data.face_image;
+      if (resultDiv) resultDiv.classList.remove('hidden');
+      state.docFaceImage = data.face_image;
+      setTimeout(() => startModule2(), 1200);
+      return;
+    }
+    if (statusEl) {
+      statusEl.innerText = 'Status: No face found on card — hold it closer and steady.';
+      statusEl.className = 'alert alert-warning mt-2 text-center';
+    }
+  } catch (err) {
+    console.error('Doc face capture error:', err);
+  } finally {
+    s4InFlight = false;
+    if (gen === s4Gen && s4Active) scheduleDocFaceTick(gen, 600);
+  }
+}
+
+// --- Module 2: 5-Dot Pupil Tracking ---
+let dotSequence = [];
+let dotIndex = 0;
+let dotHoldFrames = 0;
+const DOT_HOLD_NEEDED = 4;
+
+async function startModule2() {
+  const gen = ++s4Gen;
+  const section = document.getElementById('dot-tracking-section');
+  const docSection = document.getElementById('doc-face-section');
+  if (docSection) docSection.classList.add('hidden');
+  if (section) section.classList.remove('hidden');
+
+  const video = document.getElementById('dot-track-video');
+  const statusEl = document.getElementById('dot-track-status');
+  dotSequence = shuffleArray(DOT_POSITIONS);
+  dotIndex = 0;
+  dotHoldFrames = 0;
+  updateDotUI();
+
+  try {
+    await openCamera(video);
+    if (gen !== s4Gen) return;
+    s4Active = true;
+    statusEl.innerText = `Status: Look at the RED DOT on the right panel. Direction needed: ${dotSequence[0].label.toUpperCase()}`;
+    statusEl.className = 'alert alert-info mt-2 text-center';
+    scheduleDotTick(gen, 1200);
+  } catch (err) {
+    statusEl.innerText = 'Status: Webcam access denied.';
+    statusEl.className = 'alert alert-danger mt-2 text-center';
+  }
+}
+
+function scheduleDotTick(gen, ms) {
+  if (s4Timer) clearTimeout(s4Timer);
+  s4Timer = setTimeout(() => pollDotTrack(gen), ms);
+}
+
+function updateDotUI() {
+  const canvas = document.getElementById('dot-challenge-canvas');
+  const label = document.getElementById('dot-progress-label');
+  const bar = document.getElementById('dot-progress-bar');
+  if (label) label.innerText = `Dot ${dotIndex} / 5`;
+  if (bar) bar.style.width = `${(dotIndex / 5) * 100}%`;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0d0f14'; ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+
+  for (let i = 0; i < dotSequence.length; i++) {
+    const d = dotSequence[i];
+    const px = d.x * W, py = d.y * H;
+    if (i < dotIndex) {
+      ctx.beginPath(); ctx.arc(px, py, 14, 0, Math.PI * 2);
+      ctx.fillStyle = '#22c55e'; ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('✓', px, py + 5);
+    } else if (i === dotIndex) {
+      ctx.beginPath(); ctx.arc(px, py, 18, 0, Math.PI * 2);
+      ctx.fillStyle = '#ef4444'; ctx.fill();
+      ctx.beginPath(); ctx.arc(px, py, 22, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(d.label.toUpperCase(), px, py + 4);
+    } else {
+      ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fill();
+    }
+  }
+}
+
+function drawDotOverlay(data) {
+  const canvas = document.getElementById('dot-track-overlay');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!data) return;
+  const facing = data.both_eyes_facing;
+  if (data.face_box) {
+    const [x1, y1, x2, y2] = data.face_box;
+    ctx.strokeStyle = facing ? '#22c55e' : '#f59e0b'; ctx.lineWidth = 2;
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+  }
+  ctx.fillStyle = facing ? '#22c55e' : '#f59e0b';
+  ctx.font = '15px sans-serif';
+  ctx.fillText(`Gaze: ${data.direction || '—'}`, 10, 24);
+  const dirLabel = document.getElementById('dot-direction-label');
+  if (dirLabel) dirLabel.innerText = `Detected: ${data.direction || '—'}`;
+}
+
+async function pollDotTrack(gen) {
+  if (gen !== s4Gen || !s4Active || s4InFlight) return;
+  const video = document.getElementById('dot-track-video');
+  const statusEl = document.getElementById('dot-track-status');
+  if (!video || video.readyState < 2 || video.videoWidth === 0) {
+    scheduleDotTick(gen, 400); return;
+  }
+  const dataUrl = grabFrame(video, 520, 390);
+  s4InFlight = true;
   try {
     const resp = await fetch(`${API_BASE}/api/v1/verification/liveness`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: dataUrl, reset: livenessResetPending })
+      body: JSON.stringify({ image: dataUrl, reset: dotIndex === 0 && dotHoldFrames === 0 })
     });
-    livenessResetPending = false;
-
     const data = await resp.json().catch(() => ({}));
-    if (gen !== livenessGen || !livenessActive) return;
+    if (gen !== s4Gen || !s4Active) return;
 
-    drawLivenessOverlay(data);
+    drawDotOverlay(data);
 
-    const facing = resp.ok && data.both_eyes_facing === true;
-    if (facing) {
-      livenessHits += 1;
-      setLivenessProgress(livenessHits);
+    const target = dotSequence[dotIndex];
+    const detected = (data.direction || '').toLowerCase();
+    const match = data.both_eyes_facing && detected === target.label;
+
+    if (match) {
+      dotHoldFrames++;
       if (statusEl) {
-        statusEl.innerText = `Status: Both eyes visible (${data.direction || 'center'}). Hold still ${livenessHits}/${LIVENESS_NEEDED}...`;
+        statusEl.innerText = `Status: Looking at ${target.label.toUpperCase()} (${dotHoldFrames}/${DOT_HOLD_NEEDED})`;
         statusEl.className = 'alert alert-success mt-2 text-center';
       }
-      if (livenessHits >= LIVENESS_NEEDED) {
-        livenessActive = false;
-        if (livenessStream) {
-          livenessStream.getTracks().forEach((track) => track.stop());
-          livenessStream = null;
+      if (dotHoldFrames >= DOT_HOLD_NEEDED) {
+        dotIndex++;
+        dotHoldFrames = 0;
+        updateDotUI();
+        if (dotIndex >= 5) {
+          stopS4Camera();
+          if (statusEl) {
+            statusEl.innerText = 'Status: All 5 dots verified! Liveness confirmed. Running eKYC OCR...';
+            statusEl.className = 'alert alert-success mt-2 text-center';
+          }
+          document.getElementById('dot-tracking-section')?.classList.add('hidden');
+          const timeline = document.getElementById('pipeline-timeline');
+          if (timeline) timeline.classList.remove('hidden');
+          startPipelineAnimation();
+          return;
         }
         if (statusEl) {
-          statusEl.innerText = 'Status: Liveness verified. Running eKYC OCR...';
+          statusEl.innerText = `Status: Now look at: ${dotSequence[dotIndex].label.toUpperCase()}`;
+          statusEl.className = 'alert alert-info mt-2 text-center';
         }
-        const timeline = document.getElementById('pipeline-timeline');
-        if (timeline) timeline.classList.remove('hidden');
-        startPipelineAnimation();
-        return;
       }
-    } else if (statusEl) {
-      livenessHits = 0;
-      setLivenessProgress(0);
-      const hint = data.detail || data.direction || data.error || 'No face detected';
-      statusEl.innerText = `Status: ${hint}. Keep both eyes in view.`;
-      statusEl.className = 'alert alert-warning mt-2 text-center';
+    } else {
+      dotHoldFrames = 0;
+      if (statusEl) {
+        const hint = !data.both_eyes_facing
+          ? 'Face the camera with both eyes visible'
+          : `Look at the red dot: ${target.label.toUpperCase()} (your gaze: ${detected || 'none'})`;
+        statusEl.innerText = `Status: ${hint}`;
+        statusEl.className = 'alert alert-warning mt-2 text-center';
+      }
     }
   } catch (err) {
-    console.error('Liveness check error:', err);
+    console.error('Dot tracking error:', err);
   } finally {
-    livenessInFlight = false;
-    if (gen === livenessGen && livenessActive) {
-      scheduleLivenessTick(gen, 450);
-    }
+    s4InFlight = false;
+    if (gen === s4Gen && s4Active) scheduleDotTick(gen, 350);
   }
 }
+
+function beginStep4() {
+  stopS4Camera();
+  resetPipelineUI();
+  const docSection = document.getElementById('doc-face-section');
+  const dotSection = document.getElementById('dot-tracking-section');
+  const docOverlay = document.getElementById('doc-face-overlay');
+  const docResult = document.getElementById('doc-face-result');
+  const docStatus = document.getElementById('doc-face-status');
+  const timeline = document.getElementById('pipeline-timeline');
+  if (docSection) docSection.classList.remove('hidden');
+  if (dotSection) dotSection.classList.add('hidden');
+  if (docOverlay) docOverlay.style.display = 'flex';
+  if (docResult) docResult.classList.add('hidden');
+  if (docStatus) { docStatus.innerText = 'Status: Press Start Camera and hold your ID card in view.'; docStatus.className = 'alert alert-info mt-2 text-center'; }
+  if (timeline) timeline.classList.add('hidden');
+  dotIndex = 0; dotHoldFrames = 0;
+}
+window.beginStep4 = beginStep4;
 
 function resetPipelineUI() {
   for (let i = 1; i <= 5; i++) {
