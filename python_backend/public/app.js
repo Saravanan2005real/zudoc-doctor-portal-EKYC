@@ -538,10 +538,9 @@ function setCheckNode(id, isDone) {
 }
 
 // -------------------------------------------------------------
-// STEP 4: Two-Module eKYC Verification
-//   Module 1 — Document Face Capture (hold Aadhaar/PAN to camera)
-//   Module 2 — Pupil Tracking with 5 Red Dots
-//   Then → OCR Pipeline on uploaded documents
+// STEP 4: Two existing modules, wired into the portal
+//   Module 1 — OCR engine on uploaded Aadhaar/PAN
+//   Module 2 — eye_tracking/demo.py (FGI-Net + XY graph + center calib)
 // -------------------------------------------------------------
 let s4Stream = null;
 let s4Timer = null;
@@ -549,31 +548,19 @@ let s4Gen = 0;
 let s4Active = false;
 let s4InFlight = false;
 let pipelineRunning = false;
-
-const DOT_POSITIONS = [
-  { label: 'center', x: 0.5, y: 0.5 },
-  { label: 'left',   x: 0.15, y: 0.5 },
-  { label: 'right',  x: 0.85, y: 0.5 },
-  { label: 'top',    x: 0.5, y: 0.15 },
-  { label: 'bottom', x: 0.5, y: 0.85 },
-];
-
-function shuffleArray(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
+let module1Running = false;
+let eyeResetPending = true;
+let eyeHold = 0;
+const EYE_HOLD_NEEDED = 8;
 
 function stopS4Camera() {
   s4Active = false;
   s4InFlight = false;
   if (s4Timer) { clearTimeout(s4Timer); s4Timer = null; }
   if (s4Stream) { s4Stream.getTracks().forEach(t => t.stop()); s4Stream = null; }
-  ['doc-face-video', 'dot-track-video'].forEach(id => {
-    const v = document.getElementById(id); if (v) v.srcObject = null;
+  ['eye-track-video', 'doc-face-video'].forEach((id) => {
+    const v = document.getElementById(id);
+    if (v) v.srcObject = null;
   });
 }
 
@@ -591,6 +578,7 @@ async function openCamera(videoEl) {
 }
 
 function grabFrame(videoEl, w, h) {
+  // CSS scaleX(-1) only flips the preview. Canvas reads the raw camera frame.
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   c.getContext('2d').drawImage(videoEl, 0, 0, w, h);
@@ -599,270 +587,331 @@ function grabFrame(videoEl, w, h) {
 
 function initStep4Pipeline() {
   document.getElementById('btn-start-doc-face')?.addEventListener('click', startModule1);
+  document.getElementById('btn-capture-doc-face')?.addEventListener('click', captureLiveDoc);
 }
 
-// --- Module 1: Document Face Capture ---
+function getStep3FaceFiles() {
+  const docs = (state.ekycResult && Array.isArray(state.ekycResult.documents)) ? state.ekycResult.documents : [];
+  return docs
+    .map((d) => d.face_image_url)
+    .filter(Boolean)
+    .map((u) => {
+      try {
+        const s = String(u);
+        return s.substring(s.lastIndexOf('/') + 1);
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function renderModule1Faces(data) {
+  const resultDiv = document.getElementById('doc-face-result');
+  if (!resultDiv) return;
+
+  const holderFaceUrl = data.holder_face_image_url || null;
+  const fields = data.parsed_fields || {};
+  const name = fields.name || '';
+  const rawText = Array.isArray(data.raw_text) ? data.raw_text.filter(Boolean) : [];
+
+  const faceHtml = holderFaceUrl
+    ? `<div style="display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
+        <div style="display:inline-block; margin:0 8px;">
+          <img src="${holderFaceUrl}" alt="holder-face" style="width:112px;height:112px;object-fit:cover;border-radius:12px;border:3px solid #2563eb;" />
+          <p style="color:#111; margin-top:6px; font-weight:600;">Live holder face</p>
+        </div>
+      </div>`
+    : `<p class="text-muted mb-1">No face crop returned. Hold the card closer and capture again.</p>`;
+
+  const fieldsHtml = (() => {
+    const entries = Object.entries(fields).slice(0, 10);
+    if (!entries.length) return '';
+    return `
+      <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
+        <div style="font-weight:700; margin-bottom:0.25rem;">OCR Fields</div>
+        ${entries
+          .map(([k, v]) => `<div style="display:flex; gap:0.5rem; margin:0.15rem 0;"><span style="color:#333; min-width:150px; font-weight:600;">${k}</span><span style="color:#000;">${v ?? '-'}</span></div>`)
+          .join('')}
+      </div>
+    `;
+  })();
+
+  const rawHtml = rawText.length
+    ? `
+      <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
+        <div style="font-weight:700; margin-bottom:0.25rem;">Raw OCR Text</div>
+        <div style="color:#000; font-size:0.9rem; line-height:1.35; background:#f3f4f6; padding:0.75rem; border-radius:10px; white-space:pre-wrap; border:1px solid #d1d5db;">
+          ${rawText.join('\n')}
+        </div>
+      </div>
+    `
+    : '';
+
+  const faceDebug = data.face_debug || {};
+  const debugHtml = `
+    <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
+      <div style="font-weight:700; margin-bottom:0.25rem;">Face Detection Output</div>
+      <div style="font-size:0.92rem; background:#f3f4f6; border:1px solid #d1d5db; border-radius:10px; padding:0.75rem;">
+        <div><strong>source:</strong> ${faceDebug.source || data.face_source || 'none'}</div>
+        <div><strong>confidence:</strong> ${faceDebug.confidence ?? '-'}</div>
+        <div><strong>bbox:</strong> ${Array.isArray(faceDebug.bbox) ? faceDebug.bbox.join(', ') : '-'}</div>
+        <div><strong>aligned:</strong> ${faceDebug.aligned === true ? 'yes' : 'no'}</div>
+        <div><strong>landmarks:</strong> ${faceDebug.landmarks ? JSON.stringify(faceDebug.landmarks) : '-'}</div>
+      </div>
+    </div>
+  `;
+
+  const errorHtml = data.error
+    ? `<p class="text-danger mt-2" style="font-weight:600;">Error: ${data.error}</p>`
+    : '';
+
+  const matchRows = Array.isArray(data.step3_face_matches) ? data.step3_face_matches : [];
+  const compareHtml = matchRows.length
+    ? `
+      <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
+        <div style="font-weight:700; margin-bottom:0.25rem;">Step 3 vs Step 4.1 Face Cross-Verification</div>
+        <div style="font-size:0.92rem; background:#f3f4f6; border:1px solid #d1d5db; border-radius:10px; padding:0.75rem;">
+          ${matchRows.map((m) => `
+            <div style="margin:0.25rem 0;">
+              <strong>${m.step3_face || 'step3 face'}</strong>:
+              ${m.verified ? '<span style="color:#166534;font-weight:700;">MATCH</span>' : '<span style="color:#991b1b;font-weight:700;">NO MATCH</span>'}
+              ${m.distance !== undefined ? `(distance=${m.distance})` : ''}
+              ${m.error ? ` - ${m.error}` : ''}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `
+    : '';
+
+  resultDiv.innerHTML = `
+    <div>
+      ${faceHtml}
+      ${errorHtml}
+      ${fieldsHtml}
+      ${debugHtml}
+      ${compareHtml}
+      ${rawHtml}
+    </div>
+  `;
+  resultDiv.classList.remove('hidden');
+}
+
+// --- Module 1: live camera + existing OCR live_verify (CSS mirror, unflipped capture) ---
 async function startModule1() {
   const gen = ++s4Gen;
   const video = document.getElementById('doc-face-video');
   const overlay = document.getElementById('doc-face-overlay');
   const statusEl = document.getElementById('doc-face-status');
+  const captureBtn = document.getElementById('btn-capture-doc-face');
   const resultDiv = document.getElementById('doc-face-result');
   if (resultDiv) resultDiv.classList.add('hidden');
   try {
     await openCamera(video);
     if (gen !== s4Gen) return;
     if (overlay) overlay.style.display = 'none';
-    statusEl.innerText = 'Status: Camera on. Hold your Aadhaar/PAN card in view...';
-    statusEl.className = 'alert alert-info mt-2 text-center';
+    if (captureBtn) captureBtn.classList.remove('hidden');
     s4Active = true;
-    scheduleDocFaceTick(gen, 1200);
+    if (statusEl) {
+      statusEl.innerText = 'Status: Camera on (mirrored preview). Hold your Aadhaar/PAN in view, then Capture.';
+      statusEl.className = 'alert alert-info mt-2 text-center';
+    }
   } catch (err) {
-    statusEl.innerText = 'Status: Webcam access denied.';
-    statusEl.className = 'alert alert-danger mt-2 text-center';
+    console.error('Module1 camera error:', err);
+    if (statusEl) {
+      statusEl.innerText = `Status: Camera error — ${err.message || err}`;
+      statusEl.className = 'alert alert-danger mt-2 text-center';
+    }
   }
 }
 
-function scheduleDocFaceTick(gen, ms) {
-  if (s4Timer) clearTimeout(s4Timer);
-  s4Timer = setTimeout(() => pollDocFace(gen), ms);
-}
-
-async function pollDocFace(gen) {
-  if (gen !== s4Gen || !s4Active || s4InFlight) return;
+async function captureLiveDoc() {
   const video = document.getElementById('doc-face-video');
   const statusEl = document.getElementById('doc-face-status');
-  const canvas = document.getElementById('doc-face-canvas');
+  const captureBtn = document.getElementById('btn-capture-doc-face');
   if (!video || video.readyState < 2 || video.videoWidth === 0) {
-    scheduleDocFaceTick(gen, 400); return;
-  }
-  const dataUrl = grabFrame(video, 520, 390);
-  s4InFlight = true;
-  try {
-    const resp = await fetch(`${API_BASE}/api/v1/verification/capture-doc-face`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: dataUrl })
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (gen !== s4Gen || !s4Active) return;
-
-    const ctx = canvas?.getContext('2d');
-    if (ctx) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (data.face_detected && data.face_box) {
-        const [x1, y1, x2, y2] = data.face_box;
-        ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 3;
-        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-        ctx.fillStyle = '#22c55e'; ctx.font = '14px sans-serif';
-        ctx.fillText('Face detected on document', x1, Math.max(16, y1 - 6));
-      }
-    }
-
-    if (resp.ok && data.face_detected && data.face_image) {
-      stopS4Camera();
-      statusEl.innerText = 'Status: Face extracted from document! Proceeding to pupil tracking...';
-      statusEl.className = 'alert alert-success mt-2 text-center';
-      const resultDiv = document.getElementById('doc-face-result');
-      const img = document.getElementById('doc-face-img');
-      if (img) img.src = data.face_image;
-      if (resultDiv) resultDiv.classList.remove('hidden');
-      state.docFaceImage = data.face_image;
-      setTimeout(() => startModule2(), 1200);
-      return;
-    }
     if (statusEl) {
-      statusEl.innerText = 'Status: No face found on card — hold it closer and steady.';
+      statusEl.innerText = 'Status: Camera is not ready yet.';
       statusEl.className = 'alert alert-warning mt-2 text-center';
     }
+    return;
+  }
+  if (captureBtn) { captureBtn.disabled = true; captureBtn.innerText = 'Extracting...'; }
+  if (statusEl) {
+    statusEl.innerText = 'Status: Sending unflipped frame to existing OCR module (PaddleOCR + RetinaFace)...';
+    statusEl.className = 'alert alert-info mt-2 text-center';
+  }
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  const dataUrl = grabFrame(video, w, h);
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/verification/live-doc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl, step3_faces: getStep3FaceFiles() }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || data.detail || 'Live OCR failed');
+
+    state.liveDocResult = data;
+    renderModule1Faces(data);
+    const faceOk = !!(data.face_image_url || data.face_image);
+    if (statusEl) {
+      statusEl.innerText = faceOk
+        ? 'Status: Face extracted from the card. Starting live eye tracking...'
+        : 'Status: OCR ran but no face was found. Hold the card closer and capture again.';
+      statusEl.className = `alert ${faceOk ? 'alert-success' : 'alert-warning'} mt-2 text-center`;
+    }
+    if (faceOk) {
+      stopS4Camera();
+      if (captureBtn) captureBtn.classList.add('hidden');
+      setTimeout(() => startModule2(), 1200);
+    } else if (captureBtn) {
+      captureBtn.disabled = false;
+      captureBtn.innerText = 'Capture & Extract Face';
+    }
   } catch (err) {
-    console.error('Doc face capture error:', err);
-  } finally {
-    s4InFlight = false;
-    if (gen === s4Gen && s4Active) scheduleDocFaceTick(gen, 600);
+    console.error('Live doc OCR error:', err);
+    if (statusEl) {
+      statusEl.innerText = `Status: OCR error — ${err.message || err}`;
+      statusEl.className = 'alert alert-danger mt-2 text-center';
+    }
+    if (captureBtn) { captureBtn.disabled = false; captureBtn.innerText = 'Capture & Extract Face'; }
+
+    // Show the failure on the page (so user always sees Step 4.1 output).
+    const resultDiv = document.getElementById('doc-face-result');
+    if (resultDiv) {
+      resultDiv.classList.remove('hidden');
+      resultDiv.innerHTML = `
+        <p class="text-danger" style="font-weight:600;">Step 4.1 failed to extract face/OCR.</p>
+        <p class="text-muted">${err.message || err}</p>
+      `;
+    }
   }
 }
 
-// --- Module 2: 5-Dot Pupil Tracking ---
-let dotSequence = [];
-let dotIndex = 0;
-let dotHoldFrames = 0;
-const DOT_HOLD_NEEDED = 4;
-
+// --- Module 2: existing eye_tracking demo (camera + XY graph + center calib) ---
 async function startModule2() {
   const gen = ++s4Gen;
-  const section = document.getElementById('dot-tracking-section');
+  const section = document.getElementById('eye-track-section');
   const docSection = document.getElementById('doc-face-section');
   if (docSection) docSection.classList.add('hidden');
   if (section) section.classList.remove('hidden');
 
-  const video = document.getElementById('dot-track-video');
-  const statusEl = document.getElementById('dot-track-status');
-  dotSequence = shuffleArray(DOT_POSITIONS);
-  dotIndex = 0;
-  dotHoldFrames = 0;
-  updateDotUI();
+  const video = document.getElementById('eye-track-video');
+  const statusEl = document.getElementById('eye-track-status');
+  const bar = document.getElementById('eye-calib-bar');
+  eyeResetPending = true;
+  eyeHold = 0;
+  if (bar) bar.style.width = '0%';
 
   try {
     await openCamera(video);
     if (gen !== s4Gen) return;
     s4Active = true;
-    statusEl.innerText = `Status: Look at the RED DOT on the right panel. Direction needed: ${dotSequence[0].label.toUpperCase()}`;
+    statusEl.innerText = 'Status: Face the camera and look straight — capturing center...';
     statusEl.className = 'alert alert-info mt-2 text-center';
-    scheduleDotTick(gen, 1200);
+    scheduleEyeTick(gen, 800);
   } catch (err) {
-    statusEl.innerText = 'Status: Webcam access denied.';
+    console.error('Eye tracker camera error:', err);
+    statusEl.innerText = `Status: Camera error — ${err.message || err}`;
     statusEl.className = 'alert alert-danger mt-2 text-center';
   }
 }
 
-function scheduleDotTick(gen, ms) {
+function scheduleEyeTick(gen, ms) {
   if (s4Timer) clearTimeout(s4Timer);
-  s4Timer = setTimeout(() => pollDotTrack(gen), ms);
+  s4Timer = setTimeout(() => pollEyeTrack(gen), ms);
 }
 
-function updateDotUI() {
-  const canvas = document.getElementById('dot-challenge-canvas');
-  const label = document.getElementById('dot-progress-label');
-  const bar = document.getElementById('dot-progress-bar');
-  if (label) label.innerText = `Dot ${dotIndex} / 5`;
-  if (bar) bar.style.width = `${(dotIndex / 5) * 100}%`;
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#0d0f14'; ctx.fillRect(0, 0, W, H);
-
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
-
-  for (let i = 0; i < dotSequence.length; i++) {
-    const d = dotSequence[i];
-    const px = d.x * W, py = d.y * H;
-    if (i < dotIndex) {
-      ctx.beginPath(); ctx.arc(px, py, 14, 0, Math.PI * 2);
-      ctx.fillStyle = '#22c55e'; ctx.fill();
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('✓', px, py + 5);
-    } else if (i === dotIndex) {
-      ctx.beginPath(); ctx.arc(px, py, 18, 0, Math.PI * 2);
-      ctx.fillStyle = '#ef4444'; ctx.fill();
-      ctx.beginPath(); ctx.arc(px, py, 22, 0, Math.PI * 2);
-      ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2; ctx.stroke();
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(d.label.toUpperCase(), px, py + 4);
-    } else {
-      ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fill();
-    }
-  }
-}
-
-function drawDotOverlay(data) {
-  const canvas = document.getElementById('dot-track-overlay');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!data) return;
-  const facing = data.both_eyes_facing;
-  if (data.face_box) {
-    const [x1, y1, x2, y2] = data.face_box;
-    ctx.strokeStyle = facing ? '#22c55e' : '#f59e0b'; ctx.lineWidth = 2;
-    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-  }
-  ctx.fillStyle = facing ? '#22c55e' : '#f59e0b';
-  ctx.font = '15px sans-serif';
-  ctx.fillText(`Gaze: ${data.direction || '—'}`, 10, 24);
-  const dirLabel = document.getElementById('dot-direction-label');
-  if (dirLabel) dirLabel.innerText = `Detected: ${data.direction || '—'}`;
-}
-
-async function pollDotTrack(gen) {
+async function pollEyeTrack(gen) {
   if (gen !== s4Gen || !s4Active || s4InFlight) return;
-  const video = document.getElementById('dot-track-video');
-  const statusEl = document.getElementById('dot-track-status');
+  const video = document.getElementById('eye-track-video');
+  const statusEl = document.getElementById('eye-track-status');
+  const bar = document.getElementById('eye-calib-bar');
+  const plotImg = document.getElementById('eye-plot-view');
   if (!video || video.readyState < 2 || video.videoWidth === 0) {
-    scheduleDotTick(gen, 400); return;
+    scheduleEyeTick(gen, 400);
+    return;
   }
-  const dataUrl = grabFrame(video, 520, 390);
+  const scale = Math.min(1, 640 / video.videoWidth);
+  const dataUrl = grabFrame(video, Math.round(video.videoWidth * scale), Math.round(video.videoHeight * scale));
   s4InFlight = true;
   try {
     const resp = await fetch(`${API_BASE}/api/v1/verification/liveness`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: dataUrl, reset: dotIndex === 0 && dotHoldFrames === 0 })
+      body: JSON.stringify({ image: dataUrl, reset: eyeResetPending }),
     });
+    eyeResetPending = false;
     const data = await resp.json().catch(() => ({}));
     if (gen !== s4Gen || !s4Active) return;
 
-    drawDotOverlay(data);
+    if (data.plot_image && plotImg) plotImg.src = data.plot_image;
+    const pct = Math.round((data.calib_progress || 0) * 100);
+    if (bar) bar.style.width = `${pct}%`;
 
-    const target = dotSequence[dotIndex];
-    const detected = (data.direction || '').toLowerCase();
-    const match = data.both_eyes_facing && detected === target.label;
-
-    if (match) {
-      dotHoldFrames++;
+    if (data.calib_ready && data.both_eyes_facing) {
+      eyeHold += 1;
       if (statusEl) {
-        statusEl.innerText = `Status: Looking at ${target.label.toUpperCase()} (${dotHoldFrames}/${DOT_HOLD_NEEDED})`;
+        statusEl.innerText = `Status: Center locked. Looking ${String(data.direction || '').toUpperCase()} (${eyeHold}/${EYE_HOLD_NEEDED})`;
         statusEl.className = 'alert alert-success mt-2 text-center';
       }
-      if (dotHoldFrames >= DOT_HOLD_NEEDED) {
-        dotIndex++;
-        dotHoldFrames = 0;
-        updateDotUI();
-        if (dotIndex >= 5) {
-          stopS4Camera();
-          if (statusEl) {
-            statusEl.innerText = 'Status: All 5 dots verified! Liveness confirmed. Running eKYC OCR...';
-            statusEl.className = 'alert alert-success mt-2 text-center';
-          }
-          document.getElementById('dot-tracking-section')?.classList.add('hidden');
-          const timeline = document.getElementById('pipeline-timeline');
-          if (timeline) timeline.classList.remove('hidden');
-          startPipelineAnimation();
-          return;
-        }
-        if (statusEl) {
-          statusEl.innerText = `Status: Now look at: ${dotSequence[dotIndex].label.toUpperCase()}`;
-          statusEl.className = 'alert alert-info mt-2 text-center';
-        }
+      if (eyeHold >= EYE_HOLD_NEEDED) {
+        stopS4Camera();
+        if (statusEl) statusEl.innerText = 'Status: Eye tracking passed. Showing eKYC decision...';
+        document.getElementById('eye-track-section')?.classList.add('hidden');
+        const timeline = document.getElementById('pipeline-timeline');
+        if (timeline) timeline.classList.remove('hidden');
+        applyEkycDecision(state.ekycResult);
+        return;
       }
     } else {
-      dotHoldFrames = 0;
+      eyeHold = 0;
       if (statusEl) {
-        const hint = !data.both_eyes_facing
-          ? 'Face the camera with both eyes visible'
-          : `Look at the red dot: ${target.label.toUpperCase()} (your gaze: ${detected || 'none'})`;
-        statusEl.innerText = `Status: ${hint}`;
+        if (!data.both_eyes_facing) {
+          statusEl.innerText = `Status: ${(data.direction || 'no_face').replace(/_/g, ' ')} — both eyes must face the camera.`;
+        } else {
+          statusEl.innerText = `Status: Capturing center ${pct}% — look straight.`;
+        }
         statusEl.className = 'alert alert-warning mt-2 text-center';
       }
     }
   } catch (err) {
-    console.error('Dot tracking error:', err);
+    console.error('Eye tracking error:', err);
   } finally {
     s4InFlight = false;
-    if (gen === s4Gen && s4Active) scheduleDotTick(gen, 350);
+    if (gen === s4Gen && s4Active) scheduleEyeTick(gen, 280);
   }
 }
 
 function beginStep4() {
   stopS4Camera();
   resetPipelineUI();
+  state.ekycResult = null;
+  state.liveDocResult = null;
+  module1Running = false;
+  eyeHold = 0;
   const docSection = document.getElementById('doc-face-section');
-  const dotSection = document.getElementById('dot-tracking-section');
-  const docOverlay = document.getElementById('doc-face-overlay');
+  const eyeSection = document.getElementById('eye-track-section');
   const docResult = document.getElementById('doc-face-result');
   const docStatus = document.getElementById('doc-face-status');
+  const overlay = document.getElementById('doc-face-overlay');
+  const startBtn = document.getElementById('btn-start-doc-face');
+  const captureBtn = document.getElementById('btn-capture-doc-face');
   const timeline = document.getElementById('pipeline-timeline');
   if (docSection) docSection.classList.remove('hidden');
-  if (dotSection) dotSection.classList.add('hidden');
-  if (docOverlay) docOverlay.style.display = 'flex';
-  if (docResult) docResult.classList.add('hidden');
-  if (docStatus) { docStatus.innerText = 'Status: Press Start Camera and hold your ID card in view.'; docStatus.className = 'alert alert-info mt-2 text-center'; }
+  if (eyeSection) eyeSection.classList.add('hidden');
+  if (docResult) { docResult.classList.add('hidden'); docResult.innerHTML = ''; }
+  if (overlay) overlay.style.display = 'flex';
+  if (startBtn) { startBtn.disabled = false; startBtn.innerText = 'Allow Camera'; }
+  if (captureBtn) { captureBtn.classList.add('hidden'); captureBtn.disabled = false; captureBtn.innerText = 'Capture & Extract Face'; }
+  if (docStatus) {
+    docStatus.innerText = 'Status: Click Allow Camera, then hold your ID card and capture.';
+    docStatus.className = 'alert alert-info mt-2 text-center';
+  }
   if (timeline) timeline.classList.add('hidden');
-  dotIndex = 0; dotHoldFrames = 0;
 }
 window.beginStep4 = beginStep4;
 
@@ -916,7 +965,7 @@ function renderEkycResults(documents) {
     const validated = fields.aadhaar_number_validated || fields.pan_number_validated;
     const raw = Array.isArray(doc.raw_text) ? doc.raw_text.filter(Boolean).slice(0, 8).join(' | ') : '';
     const faceHtml = doc.face_image_url
-      ? `<img src="${doc.face_image_url}" alt="face" style="width:96px;height:96px;object-fit:cover;border-radius:8px;margin-top:8px;" />`
+      ? `<img src="${doc.face_image_url}" alt="face" style="width:96px;height:96px;object-fit:cover;border-radius:8px;margin-top:8px;border:2px solid #22c55e;" />`
       : '<div class="text-muted">No face crop</div>';
     return `
       <div class="glass-card" style="padding:1rem;">
@@ -935,7 +984,60 @@ function renderEkycResults(documents) {
       </div>`;
   }).join('');
 
+  // Show Step 4.1 live holder crop below Step 3 eKYC cards when available.
+  if (state.liveDocResult && state.liveDocResult.holder_face_image_url) {
+    cards.innerHTML += `
+      <div class="glass-card" style="padding:1rem; grid-column:1 / -1;">
+        <div style="font-weight:700; color:#111; margin-bottom:0.6rem;">Step 4.1 Face Crops</div>
+        <div style="display:flex; gap:14px; flex-wrap:wrap;">
+          <div>
+            <img src="${state.liveDocResult.holder_face_image_url}" alt="step4-holder-face" style="width:112px;height:112px;object-fit:cover;border-radius:8px;border:2px solid #2563eb;" />
+            <div style="color:#111; font-size:0.9rem; margin-top:4px;">Live holder face</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   panel.classList.remove('hidden');
+}
+
+function applyEkycDecision(data) {
+  if (!data) {
+    startPipelineAnimation();
+    return;
+  }
+  resetPipelineUI();
+  logPipe('[STEP 4.1] OCR + face extraction already completed by the existing module.');
+  logPipe('[STEP 4.2] 5-dot pupil tracking passed.');
+  (data.stages || []).forEach((stage) => {
+    activateStage(stage.id, stage.status, stage.detail);
+    logPipe(`[STAGE ${stage.id}] ${stage.title}: ${stage.detail}`);
+  });
+  renderEkycResults(data.documents || []);
+
+  const decision = (data.decision && data.decision.result) || data.status || 'UNKNOWN';
+  const badge = document.getElementById('pipeline-status-badge');
+  badge.innerText = decision;
+  if (decision === 'AUTO_VERIFIED') {
+    badge.className = 'badge badge-success';
+  } else if (decision === 'MANUAL_REVIEW') {
+    badge.className = 'badge badge-warning';
+  } else {
+    badge.className = 'badge badge-danger';
+  }
+  const conf = data.decision ? data.decision.ocr_confidence : '-';
+  const nameScore = data.decision ? data.decision.name_match_score : '-';
+  document.getElementById('pipeline-decision-desc').innerText =
+    `Decision: ${decision} (OCR ${conf}%, Name Match ${nameScore}%)`;
+  logPipe(`[DECISION] ${data.message || decision}`);
+  if (decision === 'AUTO_VERIFIED' || decision === 'MANUAL_REVIEW') {
+    document.getElementById('btn-goto-prescription').classList.remove('hidden');
+    if (state.activeDoctor) {
+      document.getElementById('rx-doctor-id').value = state.activeDoctor.public_id;
+    }
+    logPipe('[SUCCESS] Step 5 unlocked.');
+  }
 }
 
 async function startPipelineAnimation() {

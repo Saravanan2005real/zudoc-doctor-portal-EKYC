@@ -44,8 +44,8 @@ sys.meta_path.insert(0, TorchMockFinder())
 
 # Disable oneDNN/MKLDNN to prevent the PIR implementation bug on CPU
 os.environ['FLAGS_use_mkldnn'] = '0'
-# Use legacy keras for retinaface compatibility with TF 2.15+
-os.environ['TF_USE_LEGACY_KERAS'] = '1'
+# Do NOT set TF_USE_LEGACY_KERAS=1 here — it breaks `import tensorflow.keras`
+# which RetinaFace requires on TF 2.15 + standalone keras.
 # Suppress TensorFlow C++ logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -76,29 +76,43 @@ try:
     import paddle
     from paddleocr import PaddleOCR
 
+    # TensorFlow + RetinaFace BEFORE ultralytics/YOLO.
+    # YOLO's torch mock can leave import state messy; load faces first.
     try:
-        from ultralytics import YOLO
-        yolo_model = YOLO('yolov8n.pt') # Placeholder for document detection model
-    except Exception:
-        yolo_model = None
+        import tensorflow as _tf  # noqa: F401
+        # Touch keras so tensorflow.keras submodule path resolves for RetinaFace.
+        from tensorflow.keras.models import Model as _KerasModel  # noqa: F401
+    except Exception as e:
+        _sup_err.write(f"TensorFlow preload failed: {e}\n")
 
     try:
         from retinaface import RetinaFace
+        _sup_err.write("RetinaFace loaded OK\n")
     except Exception as e:
         RetinaFace = None
         _sup_err.write(f"RetinaFace load failed: {e}\n")
 
     try:
         from deepface import DeepFace
+        _sup_err.write("DeepFace loaded OK\n")
     except Exception as e:
         DeepFace = None
         _sup_err.write(f"DeepFace load failed: {e}\n")
+
+    try:
+        from ultralytics import YOLO
+        yolo_model = YOLO('yolov8n.pt')  # Placeholder for document detection model
+    except Exception:
+        yolo_model = None
 finally:
     sys.stdout, sys.stderr = _old_stdout, _old_stderr
     captured = (_sup_err.getvalue() or "") + (_sup_out.getvalue() or "")
+    for line in (captured or "").splitlines():
+        if "RetinaFace" in line or "DeepFace" in line or "TensorFlow preload" in line:
+            print(line, file=sys.stderr)
     fatal = any(k in captured.lower() for k in ("traceback", "error:", "exception"))
-    if fatal:
-        print(captured[-4000:], file=sys.stderr)
+    if fatal and ("RetinaFace load failed" in captured or "DeepFace load failed" in captured):
+        print(captured[-2000:], file=sys.stderr)
 
 # Suppress paddlex logger
 import logging
@@ -111,10 +125,20 @@ app = Flask(__name__)
 CORS(app)
 
 
-# Ensure upload directory exists
-UPLOAD_FOLDER = './ocr_uploads'
+# Ensure upload directory exists — use an absolute path so the folder is always
+# python_backend/ocr_uploads/ regardless of the working directory at launch time.
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'ocr_uploads')
+UPLOAD_FOLDER = os.path.abspath(UPLOAD_FOLDER)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+
+def _save_jpg(path: str, img) -> bool:
+    try:
+        ok = cv2.imwrite(path, img)
+        return bool(ok) and os.path.exists(path) and os.path.getsize(path) > 0
+    except Exception:
+        return False
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -1222,26 +1246,382 @@ def prepare_ocr_candidates(img_np):
     mild = enhance_image_for_ocr(img_np)
     return [("mild", mild), ("raw", img_np.copy())]
 
-# Face Extraction & Alignment using RetinaFace
-def extract_and_align_face(img_np):
-    if RetinaFace is None:
+# Face Extraction & Alignment using RetinaFace + fallback
+def _face_detection_candidates(primary_bgr, original_bgr=None):
+    """
+    Build candidate images for face extraction, from most likely to least likely.
+    """
+    candidates = []
+    if primary_bgr is not None:
+        candidates.append(("warped", primary_bgr))
+
+        # Mild contrast enhancement can help on dim camera frames.
+        try:
+            candidates.append(("warped_clahe", _apply_clahe(primary_bgr, clip_limit=2.0)))
+        except Exception:
+            pass
+
+    if original_bgr is not None:
+        candidates.append(("original", original_bgr))
+        try:
+            candidates.append(("original_clahe", _apply_clahe(original_bgr, clip_limit=2.0)))
+        except Exception:
+            pass
+    return candidates
+
+
+def _opencv_face_fallback(img_bgr):
+    """
+    Last-resort fallback if RetinaFace misses.
+    """
+    try:
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+        face_cascade = cv2.CascadeClassifier(cascade_path)
+        if face_cascade.empty():
+            return None
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
+        if faces is None or len(faces) == 0:
+            return None
+        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+        pad_x = int(0.22 * w)
+        pad_y = int(0.28 * h)
+        x1 = max(0, x - pad_x)
+        y1 = max(0, y - pad_y)
+        x2 = min(img_bgr.shape[1], x + w + pad_x)
+        y2 = min(img_bgr.shape[0], y + h + pad_y)
+        crop = img_bgr[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        return cv2.resize(crop, (112, 112)), {
+            "source": "opencv_haar",
+            "confidence": None,
+            "bbox": [int(x1), int(y1), int(x2), int(y2)],
+            "landmarks": None,
+            "aligned": False,
+        }
+    except Exception:
+        return None
+
+
+def _to_3point(landmarks):
+    if not isinstance(landmarks, dict):
+        return None
+    le = landmarks.get("left_eye")
+    re = landmarks.get("right_eye")
+    no = landmarks.get("nose")
+    if not le or not re or not no:
         return None
     try:
-        # RetinaFace.extract_faces returns a list of RGB numpy arrays of extracted faces
-        # align=True ensures the face is aligned based on eye landmarks
-        # expand_face_area=100 adds a 100% margin around the detected face so it captures the full head
-        faces = RetinaFace.extract_faces(img_path=img_np, align=True, expand_face_area=100)
-        if faces and len(faces) > 0:
-            # Find the largest face (assuming it's the main photo on the ID)
-            largest_face = max(faces, key=lambda f: f.shape[0] * f.shape[1])
-            # Resize to 112x112 as requested
-            resized_face = cv2.resize(largest_face, (112, 112))
-            # Convert back to BGR for cv2.imwrite
-            bgr_face = cv2.cvtColor(resized_face, cv2.COLOR_RGB2BGR)
-            return bgr_face
-    except Exception as e:
-        print(f"Face extraction failed: {e}")
-    return None
+        return np.float32([[float(le[0]), float(le[1])], [float(re[0]), float(re[1])], [float(no[0]), float(no[1])]])
+    except Exception:
+        return None
+
+
+def _align_and_crop_from_detection(img_bgr, det):
+    facial_area = det.get("facial_area") or det.get("bbox")
+    landmarks = det.get("landmarks")
+    if not facial_area or len(facial_area) != 4:
+        return None, None
+
+    x1, y1, x2, y2 = [int(v) for v in facial_area]
+    h, w = img_bgr.shape[:2]
+    x1 = max(0, min(w - 1, x1))
+    y1 = max(0, min(h - 1, y1))
+    x2 = max(0, min(w, x2))
+    y2 = max(0, min(h, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None, None
+
+    # Expand bbox a little so full face is kept.
+    bw = x2 - x1
+    bh = y2 - y1
+    px = int(0.18 * bw)
+    py = int(0.22 * bh)
+    ex1 = max(0, x1 - px)
+    ey1 = max(0, y1 - py)
+    ex2 = min(w, x2 + px)
+    ey2 = min(h, y2 + py)
+
+    crop = img_bgr[ey1:ey2, ex1:ex2]
+    if crop.size == 0:
+        return None, None
+
+    aligned = False
+    three = _to_3point(landmarks)
+    if three is not None:
+        # Align face by mapping (left_eye, right_eye, nose) to canonical points.
+        src = np.float32([
+            [three[0][0] - ex1, three[0][1] - ey1],
+            [three[1][0] - ex1, three[1][1] - ey1],
+            [three[2][0] - ex1, three[2][1] - ey1],
+        ])
+        dst = np.float32([[38.0, 40.0], [74.0, 40.0], [56.0, 72.0]])
+        try:
+            M = cv2.getAffineTransform(src, dst)
+            aligned_face = cv2.warpAffine(crop, M, (112, 112), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            aligned = True
+            return aligned_face, aligned
+        except Exception:
+            pass
+
+    return cv2.resize(crop, (112, 112)), aligned
+
+
+def _detect_faces_on_image(img_bgr, source_label="frame"):
+    """
+    Run RetinaFace (then OpenCV fallback) and return every face found.
+    Each item: {"face": 112x112 BGR, "area": int, "meta": dict}
+    Sorted largest-area first.
+    """
+    found = []
+    if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
+        return found
+
+    if RetinaFace is not None:
+        try:
+            rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            detections = RetinaFace.detect_faces(rgb)
+            if detections and isinstance(detections, dict):
+                for _, det in detections.items():
+                    if not isinstance(det, dict):
+                        continue
+                    area_box = det.get("facial_area") or [0, 0, 0, 0]
+                    if len(area_box) != 4:
+                        continue
+                    x1, y1, x2, y2 = [int(v) for v in area_box]
+                    area = max(0, x2 - x1) * max(0, y2 - y1)
+                    if area <= 0:
+                        continue
+                    face112, aligned = _align_and_crop_from_detection(img_bgr, det)
+                    if face112 is None:
+                        continue
+                    found.append({
+                        "face": face112,
+                        "area": area,
+                        "meta": {
+                            "source": f"retinaface:{source_label}",
+                            "confidence": float(det.get("score")) if det.get("score") is not None else None,
+                            "bbox": [x1, y1, x2, y2],
+                            "landmarks": det.get("landmarks"),
+                            "aligned": bool(aligned),
+                        },
+                    })
+        except Exception as e:
+            print(f"RetinaFace multi-face detection failed on {source_label}: {e}")
+
+    if not found:
+        fallback_res = _opencv_face_fallback(img_bgr)
+        if fallback_res is not None:
+            face112, meta = fallback_res
+            bbox = meta.get("bbox") or [0, 0, 0, 0]
+            area = max(0, bbox[2] - bbox[0]) * max(0, bbox[3] - bbox[1])
+            found.append({
+                "face": face112,
+                "area": area,
+                "meta": {**meta, "source": f"opencv:{source_label}"},
+            })
+
+    found.sort(key=lambda f: f["area"], reverse=True)
+    return found
+
+
+def _mask_out_bbox(img_bgr, bbox, pad_ratio=0.15):
+    """Black-out a face bbox so a second pass can find the printed ID photo."""
+    if img_bgr is None or not bbox or len(bbox) != 4:
+        return img_bgr
+    out = img_bgr.copy()
+    h, w = out.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    bw, bh = max(1, x2 - x1), max(1, y2 - y1)
+    px, py = int(pad_ratio * bw), int(pad_ratio * bh)
+    x1 = max(0, x1 - px)
+    y1 = max(0, y1 - py)
+    x2 = min(w, x2 + px)
+    y2 = min(h, y2 + py)
+    out[y1:y2, x1:x2] = 0
+    return out
+
+
+def extract_holder_and_id_card_faces(full_bgr, doc_bgr=None, warped_ok=False):
+    """
+    Step 4.1: person holding an ID card in front of the camera.
+
+    RetinaFace often sees TWO faces:
+      - largest  → live holder
+      - smaller  → photo printed on the held ID card
+
+    Never treat the live holder crop as the ID-card face.
+    """
+    empty_meta = {
+        "source": "none",
+        "confidence": None,
+        "bbox": None,
+        "landmarks": None,
+        "aligned": False,
+    }
+
+    # Pass 1: all faces on the full webcam frame
+    frame_faces = []
+    for source, candidate in _face_detection_candidates(full_bgr, None):
+        hits = _detect_faces_on_image(candidate, source_label=source)
+        if hits:
+            frame_faces = hits
+            break
+
+    holder_face = None
+    holder_meta = dict(empty_meta)
+    id_face = None
+    id_meta = dict(empty_meta)
+
+    if frame_faces:
+        holder_face = frame_faces[0]["face"]
+        holder_meta = {**frame_faces[0]["meta"], "role": "holder"}
+
+        # Prefer a clearly smaller face (printed ID photo) over near-duplicates.
+        # Printed card faces are typically << live face; require a real min size.
+        holder_area = max(1, frame_faces[0]["area"])
+        min_id_area = max(40 * 40, int(holder_area * 0.01))
+        smaller = [
+            f for f in frame_faces[1:]
+            if f["area"] < holder_area * 0.55 and f["area"] >= min_id_area
+        ]
+        if smaller:
+            # Among small faces, take the largest (best ID-photo crop)
+            pick = max(smaller, key=lambda f: f["area"])
+            id_face = pick["face"]
+            id_meta = {**pick["meta"], "role": "id_card"}
+        elif len(frame_faces) >= 2:
+            pick = frame_faces[-1]  # smallest remaining
+            if min_id_area <= pick["area"] < holder_area * 0.85:
+                id_face = pick["face"]
+                id_meta = {**pick["meta"], "role": "id_card"}
+
+    # Pass 2: if only the holder was found, mask them out and search again
+    if id_face is None and holder_meta.get("bbox"):
+        masked = _mask_out_bbox(full_bgr, holder_meta["bbox"], pad_ratio=0.2)
+        # Upscale so the tiny printed face is large enough for RetinaFace
+        h, w = masked.shape[:2]
+        up = cv2.resize(masked, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+        min_id_area = 40 * 40
+        for source, candidate in (("masked_x2", up), ("masked", masked)):
+            hits = _detect_faces_on_image(candidate, source_label=source)
+            if not hits:
+                continue
+            pick = hits[0]
+            # Reject tiny Haar false-positives on the masked frame
+            area = pick["area"]
+            if source == "masked_x2":
+                area = area // 4  # bbox was measured on 2x image
+            if area < min_id_area:
+                continue
+            meta = dict(pick["meta"])
+            if source == "masked_x2" and meta.get("bbox"):
+                meta["bbox"] = [int(v / 2) for v in meta["bbox"]]
+            id_face = pick["face"]
+            id_meta = {**meta, "role": "id_card"}
+            break
+
+    # Pass 3: search inside a successfully warped ID-card crop only
+    if id_face is None and warped_ok and doc_bgr is not None:
+        # Upscale small card crops so RetinaFace can see the printed photo
+        dh, dw = doc_bgr.shape[:2]
+        doc_variants = [("doc", doc_bgr)]
+        if min(dh, dw) < 600:
+            doc_variants.insert(0, (
+                "doc_x2",
+                cv2.resize(doc_bgr, (dw * 2, dh * 2), interpolation=cv2.INTER_CUBIC),
+            ))
+        try:
+            doc_variants.append(("doc_clahe", _apply_clahe(doc_bgr, clip_limit=2.0)))
+        except Exception:
+            pass
+
+        for source, candidate in doc_variants:
+            hits = _detect_faces_on_image(candidate, source_label=source)
+            if not hits:
+                continue
+            # On a warped card, take the largest face in that crop (the ID photo).
+            # If the crop somehow still includes the holder, skip faces that are
+            # huge relative to the card (holder bleeding into a bad warp).
+            card_area = candidate.shape[0] * candidate.shape[1]
+            for pick in hits:
+                if pick["area"] > card_area * 0.45:
+                    continue  # too big to be a printed photo on the card
+                id_face = pick["face"]
+                id_meta = {**pick["meta"], "role": "id_card"}
+                break
+            if id_face is not None:
+                break
+            # Fallback: accept best face on a clean warp
+            id_face = hits[0]["face"]
+            id_meta = {**hits[0]["meta"], "role": "id_card"}
+            break
+
+    return id_face, id_meta, holder_face, holder_meta
+
+
+def extract_and_align_face(primary_bgr, original_bgr=None):
+    best_face = None
+    best_area = 0
+    best_meta = {
+        "source": "none",
+        "confidence": None,
+        "bbox": None,
+        "landmarks": None,
+        "aligned": False,
+    }
+
+    # Try RetinaFace across multiple image variants.
+    if RetinaFace is not None:
+        for source, candidate in _face_detection_candidates(primary_bgr, original_bgr):
+            try:
+                # Per requested pipeline: preprocess candidate -> convert BGR to RGB
+                # before RetinaFace detection.
+                rgb_candidate = cv2.cvtColor(candidate, cv2.COLOR_BGR2RGB)
+                detections = RetinaFace.detect_faces(rgb_candidate)
+                if not detections or not isinstance(detections, dict):
+                    continue
+                for _, det in detections.items():
+                    if not isinstance(det, dict):
+                        continue
+                    area_box = det.get("facial_area") or [0, 0, 0, 0]
+                    if len(area_box) != 4:
+                        continue
+                    x1, y1, x2, y2 = [int(v) for v in area_box]
+                    area = max(0, x2 - x1) * max(0, y2 - y1)
+                    if area <= 0:
+                        continue
+                    face112, aligned = _align_and_crop_from_detection(candidate, det)
+                    if face112 is None:
+                        continue
+                    if area > best_area:
+                        best_area = area
+                        best_face = face112
+                        best_meta = {
+                            "source": f"retinaface:{source}",
+                            "confidence": float(det.get("score")) if det.get("score") is not None else None,
+                            "bbox": [x1, y1, x2, y2],
+                            "landmarks": det.get("landmarks"),
+                            "aligned": bool(aligned),
+                        }
+            except Exception as e:
+                print(f"RetinaFace face extraction failed on {source}: {e}")
+
+    # Fallback: OpenCV Haar face detector.
+    if best_face is None:
+        for source, candidate in _face_detection_candidates(primary_bgr, original_bgr):
+            fallback_res = _opencv_face_fallback(candidate)
+            if fallback_res is not None:
+                fallback_face, fallback_meta = fallback_res
+                best_face = fallback_face
+                best_meta = {
+                    **fallback_meta,
+                    "source": f"opencv:{source}",
+                }
+                break
+
+    return best_face, best_meta
 
 # Regex Parsing for Aadhaar Fields
 def _digits_only(s: str) -> str:
@@ -1895,14 +2275,26 @@ def live_verify_api():
 
         filename_id = str(uuid.uuid4())
         
-        # 1. Face Extraction (RetinaFace) — use warped crop before OCR enhance
+        # 1. Face Extraction (RetinaFace) — Step 4.1
+        # Person holds ID: largest face = live holder, smaller face = photo on card.
         doc_img, warped_ok = detect_and_warp_document(img)
-        face_img = extract_and_align_face(doc_img)
-        face_filename = None
-        if face_img is not None:
-            face_filename = f"live_face_{filename_id}.jpg"
-            face_path = os.path.join(app.config['UPLOAD_FOLDER'], face_filename)
-            cv2.imwrite(face_path, face_img)
+        id_face_img, id_face_meta, holder_face_img, holder_face_meta = (
+            extract_holder_and_id_card_faces(img, doc_img, warped_ok)
+        )
+
+        id_face_filename = None
+        if id_face_img is not None:
+            candidate = f"live_id_face_{filename_id}.jpg"
+            id_face_path = os.path.join(app.config['UPLOAD_FOLDER'], candidate)
+            if _save_jpg(id_face_path, id_face_img):
+                id_face_filename = candidate
+
+        holder_face_filename = None
+        if holder_face_img is not None:
+            candidate = f"live_holder_face_{filename_id}.jpg"
+            holder_face_path = os.path.join(app.config['UPLOAD_FOLDER'], candidate)
+            if _save_jpg(holder_face_path, holder_face_img):
+                holder_face_filename = candidate
 
         # 2. OCR-safe enhance + best pass
         best_img, extracted_lines, _scores, _avg, parsed_fields, _label = best_ocr_pass(
@@ -1911,14 +2303,16 @@ def live_verify_api():
 
         doc_filename = f"live_doc_{filename_id}.jpg"
         doc_path = os.path.join(app.config['UPLOAD_FOLDER'], doc_filename)
-        cv2.imwrite(doc_path, best_img)
+        if not _save_jpg(doc_path, best_img):
+            return jsonify({"status": "failed", "error": "Failed to save processed live document image"}), 500
 
-        # 3. Face Matching (Step 1 vs Live)
+        # 3. Face Matching (Step 1 vs Live + Step3 doc faces vs Step4.1 extracted face)
         face_match_result = None
         step1_face_filename = data.get('step1_face')
-        if step1_face_filename and face_filename and DeepFace is not None:
+        compare_target_filename = id_face_filename or holder_face_filename
+        if step1_face_filename and compare_target_filename and DeepFace is not None:
             step1_face_path = os.path.join(app.config['UPLOAD_FOLDER'], step1_face_filename)
-            live_face_path = os.path.join(app.config['UPLOAD_FOLDER'], face_filename)
+            live_face_path = os.path.join(app.config['UPLOAD_FOLDER'], compare_target_filename)
             if os.path.exists(step1_face_path) and os.path.exists(live_face_path):
                 try:
                     # Enforce detection=False because we already cropped the faces to 112x112 using RetinaFace
@@ -1927,13 +2321,49 @@ def live_verify_api():
                 except Exception as e:
                     print(f"DeepFace verification failed: {e}")
 
+        step3_face_matches = []
+        step3_faces = data.get('step3_faces') or []
+        if DeepFace is not None and compare_target_filename and isinstance(step3_faces, list):
+            compare_target_path = os.path.join(app.config['UPLOAD_FOLDER'], compare_target_filename)
+            if os.path.exists(compare_target_path):
+                for step3_face in step3_faces:
+                    try:
+                        step3_name = os.path.basename(str(step3_face))
+                        step3_path = os.path.join(app.config['UPLOAD_FOLDER'], step3_name)
+                        if not os.path.exists(step3_path):
+                            continue
+                        vr = DeepFace.verify(
+                            img1_path=step3_path,
+                            img2_path=compare_target_path,
+                            enforce_detection=False,
+                        )
+                        step3_face_matches.append({
+                            "step3_face": step3_name,
+                            "verified": bool(vr.get("verified", False)),
+                            "distance": vr.get("distance"),
+                            "threshold": vr.get("threshold"),
+                        })
+                    except Exception as e:
+                        step3_face_matches.append({
+                            "step3_face": os.path.basename(str(step3_face)),
+                            "verified": False,
+                            "error": str(e),
+                        })
+
         return jsonify({
             "status": "success",
-            "face_image_url": f"/ocr_uploads/{face_filename}" if face_filename else None,
+            # Backward compatibility: keep face_image_url as ID-card extracted face
+            "face_image_url": f"/ocr_uploads/{id_face_filename}" if id_face_filename else None,
+            "id_card_face_image_url": f"/ocr_uploads/{id_face_filename}" if id_face_filename else None,
+            "holder_face_image_url": f"/ocr_uploads/{holder_face_filename}" if holder_face_filename else None,
+            "face_source": id_face_meta.get("source"),
+            "face_debug": id_face_meta,
+            "holder_face_debug": holder_face_meta,
             "processed_image_url": f"/ocr_uploads/{doc_filename}",
             "parsed_fields": parsed_fields,
             "raw_text": extracted_lines,
-            "face_match": face_match_result
+            "face_match": face_match_result,
+            "step3_face_matches": step3_face_matches,
         })
         
     except Exception as e:
@@ -1966,24 +2396,29 @@ def run_ocr():
         # Step 2: Document Detection & Warp
         warped_img, warped_ok = detect_and_warp_document(img)
 
-        # Step 3: Face from warped crop (before OCR enhance)
-        face_img = extract_and_align_face(warped_img)
+        stem = os.path.splitext(filename)[0]
+
+        # Step 3: Face extraction pipeline (same rules as Step 4.1)
+        # Input -> preprocess (resize/perspective) -> RetinaFace -> bbox -> crop ->
+        # align (eye landmarks) -> resize 112x112 -> save temp image.
+        face_img, face_meta = extract_and_align_face(warped_img, img)
         face_filename = None
         if face_img is not None:
-            face_filename = f"aadhaar_face_{filename}.jpg"
-            face_path = os.path.join(app.config['UPLOAD_FOLDER'], face_filename)
-            cv2.imwrite(face_path, face_img)
+            candidate = f"aadhaar_face_{stem}.jpg"
+            face_path = os.path.join(app.config['UPLOAD_FOLDER'], candidate)
+            if _save_jpg(face_path, face_img):
+                face_filename = candidate
 
         # Step 4: OCR-safe enhance + dual-pass PaddleOCR (mild vs raw)
-        stem = os.path.splitext(filename)[0]
         processed_img, extracted_lines, confidence_scores, avg_confidence, parsed_fields, ocr_pass = best_ocr_pass(
             warped_img, app.config['UPLOAD_FOLDER'], stem, hinted_type=hinted_type
         )
 
         # Save the pipeline image used for the winning OCR pass
-        pipeline_filename = f"processed_{filename}"
+        pipeline_filename = f"processed_{stem}.jpg"
         pipeline_path = os.path.join(app.config['UPLOAD_FOLDER'], pipeline_filename)
-        cv2.imwrite(pipeline_path, processed_img)
+        if not _save_jpg(pipeline_path, processed_img):
+            return jsonify({"status": "failed", "error": "Failed to save OCR processed image"}), 500
 
         return jsonify({
             "status": "success",
@@ -1994,7 +2429,9 @@ def run_ocr():
             "ocr_confidence": round(avg_confidence * 100, 2),
             "parsed_fields": parsed_fields,
             "processed_image_url": f"/ocr_uploads/{pipeline_filename}",
-            "face_image_url": f"/ocr_uploads/{face_filename}" if face_filename else None
+            "face_image_url": f"/ocr_uploads/{face_filename}" if face_filename else None,
+            "face_source": face_meta.get("source"),
+            "face_debug": face_meta,
         })
 
     except Exception as e:

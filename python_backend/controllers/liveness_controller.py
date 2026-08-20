@@ -13,12 +13,29 @@ warnings.filterwarnings("ignore", message="SymbolDatabase.GetPrototype")
 logger = logging.getLogger(__name__)
 _tracker_lock = threading.Lock()
 
+# When center calibration locks, we capture the current pupil coordinates and
+# subtract them from subsequent points. This prevents small calibration bias
+# from making the graph look "slightly up" even when the user is centered.
+_center_offset_left = None
+_center_offset_right = None
+
 try:
-    from eye_tracking.fgi_eye_tracker import EyeTracker
+    import sys
+    import types
+
+    # MediaPipe 0.10.14 pulls tensorflow via mediapipe.tasks; Face Mesh only needs solutions.
+    sys.modules.setdefault("mediapipe.tasks", types.ModuleType("mediapipe.tasks"))
+    sys.modules.setdefault("mediapipe.tasks.python", types.ModuleType("mediapipe.tasks.python"))
+
+    from eye_tracking.fgi_eye_tracker import EyeTracker, EyeXYGraph
     tracker = EyeTracker()
+    graph = EyeXYGraph(width=360, height=360, history=80)
+    _graph_locked = False
 except Exception as e:
     logger.error("Failed to load EyeTracker: %s", e)
     tracker = None
+    graph = None
+    _graph_locked = False
 
 router = APIRouter(
     prefix="/api/v1/verification",
@@ -28,9 +45,6 @@ router = APIRouter(
 class LivenessRequest(BaseModel):
     image: str
     reset: bool = False
-
-class DocFaceRequest(BaseModel):
-    image: str
 
 
 def _decode_image(data_url: str):
@@ -42,14 +56,68 @@ def _decode_image(data_url: str):
     return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
 
-def _estimate(img, reset: bool = False):
+def _jpeg_url(img, quality=80):
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+def _run_demo_frame(img, reset: bool = False):
+    """Call the existing EyeTracker + EyeXYGraph exactly like demo.py."""
+    global _graph_locked
+    global _center_offset_left, _center_offset_right
     with _tracker_lock:
         if reset:
             try:
                 tracker.eyes.calibrator.reset()
             except Exception:
                 pass
-        return tracker.estimate(img)
+            graph.clear()
+            _graph_locked = False
+            _center_offset_left = None
+            _center_offset_right = None
+
+        frame = cv2.flip(img, 1)
+        result = tracker.estimate(frame)
+
+        if result.calib_ready and not _graph_locked:
+            graph.clear()
+            _graph_locked = True
+            # Capture current coordinates as the "true center" reference.
+            if getattr(result, "both_eyes_facing", False) and result.left_xy is not None and result.right_xy is not None:
+                _center_offset_left = tuple(result.left_xy)
+                _center_offset_right = tuple(result.right_xy)
+            else:
+                _center_offset_left = None
+                _center_offset_right = None
+
+        # If calib_ready happened before we got both eyes facing, capture the
+        # center offset as soon as both eyes become available.
+        if _graph_locked and _center_offset_left is None and _center_offset_right is None:
+            if getattr(result, "both_eyes_facing", False) and result.left_xy is not None and result.right_xy is not None:
+                _center_offset_left = tuple(result.left_xy)
+                _center_offset_right = tuple(result.right_xy)
+
+        if result.both_eyes_facing:
+            # Apply center offset correction if available.
+            if _center_offset_left is not None and _center_offset_right is not None and result.left_xy is not None and result.right_xy is not None:
+                lx, ly = result.left_xy
+                rx, ry = result.right_xy
+                clx, cly = _center_offset_left
+                crx, cry = _center_offset_right
+
+                # Clamp to keep values inside [-1, 1] for the graph renderer.
+                adj_left = (max(-1.0, min(1.0, lx - clx)), max(-1.0, min(1.0, ly - cly)))
+                adj_right = (max(-1.0, min(1.0, rx - crx)), max(-1.0, min(1.0, ry - cry)))
+                graph.push(adj_left, adj_right)
+            else:
+                graph.push(result.left_xy, result.right_xy)
+
+        # During/after calibration lock, force the label to show CENTER.
+        direction_for_plot = "center" if result.calib_ready else getattr(result, "direction", "")
+        plot_view = graph.render(direction=direction_for_plot)
+        return result, plot_view, direction_for_plot
 
 
 @router.post("/liveness")
@@ -62,28 +130,29 @@ async def check_liveness(req: LivenessRequest):
         if img is None:
             raise HTTPException(status_code=400, detail="Invalid image data")
 
-        # Skip near-black warmup frames so liveness cannot "pass" instantly.
         if float(np.mean(img)) < 12:
             return {
                 "status": "success",
                 "both_eyes_facing": False,
                 "direction": "no_face",
                 "face_detected": False,
-                "face_box": None,
+                "calib_ready": False,
+                "calib_progress": 0.0,
+                "plot_image": None,
             }
 
-        result = await asyncio.to_thread(_estimate, img, req.reset)
-
-        face_box = getattr(result, "face_box", None)
-        if face_box is not None:
-            face_box = [int(v) for v in face_box]
+        result, plot_view, direction_for_plot = await asyncio.to_thread(_run_demo_frame, img, req.reset)
 
         return {
             "status": "success",
             "both_eyes_facing": bool(result.both_eyes_facing),
-            "direction": getattr(result, "direction", "unknown"),
+            "direction": direction_for_plot or getattr(result, "direction", "unknown"),
             "face_detected": bool(getattr(result, "face_detected", False)),
-            "face_box": face_box,
+            "calib_ready": bool(getattr(result, "calib_ready", False)),
+            "calib_progress": float(getattr(result, "calib_progress", 0.0) or 0.0),
+            "left_xy": list(result.left_xy) if result.left_xy else None,
+            "right_xy": list(result.right_xy) if result.right_xy else None,
+            "plot_image": _jpeg_url(plot_view),
         }
     except HTTPException:
         raise
@@ -92,56 +161,38 @@ async def check_liveness(req: LivenessRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _detect_face_on_document(img):
-    """Use OpenCV Haar cascade to find faces in a document image held in front of camera."""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    face_cascade = None
-    if hasattr(cv2, "CascadeClassifier"):
-        for xml in [
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml",
-            cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml",
-        ]:
-            cc = cv2.CascadeClassifier(xml)
-            if not cc.empty():
-                face_cascade = cc
-                break
-    if face_cascade is None:
-        return None, None
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(40, 40))
-    if len(faces) == 0:
-        return None, None
-    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-    pad = int(0.15 * max(w, h))
-    y1 = max(0, y - pad); x1 = max(0, x - pad)
-    y2 = min(img.shape[0], y + h + pad); x2 = min(img.shape[1], x + w + pad)
-    crop = img[y1:y2, x1:x2]
-    crop_resized = cv2.resize(crop, (112, 112))
-    return crop_resized, [int(x1), int(y1), int(x2), int(y2)]
+class LiveDocRequest(BaseModel):
+    image: str
+    step3_faces: list[str] = []
 
 
-@router.post("/capture-doc-face")
-async def capture_doc_face(req: DocFaceRequest):
-    """Extract face from ID card held in front of camera."""
+@router.post("/live-doc")
+async def live_doc_ocr(req: LiveDocRequest):
+    """Proxy webcam frame to the existing OCR live_verify module (unflipped capture)."""
+    import os
+    import requests
+
+    ocr_url = os.getenv("OCR_SERVICE_URL", "http://127.0.0.1:5001/api/v1/ocr")
+    live_url = ocr_url.replace("/api/v1/ocr", "/api/v1/live_verify")
+    base = ocr_url.replace("/api/v1/ocr", "").rstrip("/")
+
+    def _call():
+        payload = {"image": req.image, "step3_faces": req.step3_faces or []}
+        resp = requests.post(live_url, json=payload, timeout=180)
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = {"error": resp.text[:300]}
+        return resp.status_code, payload
+
     try:
-        img = _decode_image(req.image)
-        if img is None:
-            raise HTTPException(status_code=400, detail="Invalid image")
-        if float(np.mean(img)) < 12:
-            return {"face_detected": False, "face_image": None, "face_box": None}
-
-        face_crop, face_box = await asyncio.to_thread(_detect_face_on_document, img)
-        if face_crop is None:
-            return {"face_detected": False, "face_image": None, "face_box": None}
-
-        _, buf = cv2.imencode(".jpg", face_crop)
-        b64 = base64.b64encode(buf).decode()
-        return {
-            "face_detected": True,
-            "face_image": f"data:image/jpeg;base64,{b64}",
-            "face_box": face_box,
-        }
-    except HTTPException:
-        raise
+        code, data = await asyncio.to_thread(_call)
     except Exception as e:
-        logger.exception("Doc face capture failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail=f"OCR live_verify unreachable: {e}")
+
+    if code >= 400:
+        raise HTTPException(status_code=code, detail=data.get("error") or data.get("detail") or "live OCR failed")
+
+    # Image URLs are already relative paths (e.g. /ocr_uploads/...) and will be
+    # served by the portal's own /ocr_uploads static mount — no rewriting needed.
+    return data

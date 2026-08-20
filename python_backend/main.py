@@ -1,9 +1,10 @@
 import os
 import uvicorn
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database import Base
@@ -67,7 +68,7 @@ DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASS = os.getenv("DB_PASSWORD", "dinesh_2006")
 DB_NAME = os.getenv("DB_NAME", "doctor_verification_db")
 
-SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 try:
     engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -109,9 +110,24 @@ app.include_router(dlq_router)
 app.include_router(prescription_router)
 app.include_router(liveness_router)
 
+class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.endswith((".html", ".js", ".css")) or path == "/":
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
+
+app.add_middleware(NoCacheStaticMiddleware)
+
 # Mount static files
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+# Serve OCR-generated face crops and processed images at the portal's own origin
+# so the browser doesn't need cross-origin requests to the OCR Flask service.
+os.makedirs("ocr_uploads", exist_ok=True)
+app.mount("/ocr_uploads", StaticFiles(directory="ocr_uploads"), name="ocr_uploads")
 
 os.makedirs("public", exist_ok=True)
 app.mount("/", StaticFiles(directory="public", html=True), name="public")
@@ -163,8 +179,8 @@ if __name__ == "__main__":
     logger.info("=======================================================")
     
     try:
-        logger.info(f"Server listening and serving HTTP on port {port}...")
+        logger.info(f"Server listening and serving HTTP at: http://127.0.0.1:{port}")
         uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
     except Exception as e:
-        logger.warning(f"[SERVER NOTICE] Port {port} bound or busy. Trying fallback port 8081...")
+        logger.warning(f"[SERVER NOTICE] Port {port} bound or busy. Trying fallback port 8081 at http://127.0.0.1:8081")
         uvicorn.run("main:app", host="0.0.0.0", port=8081, log_level="info")

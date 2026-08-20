@@ -280,12 +280,11 @@ class DefaultEkycEvaluationService:
             raise Exception(data.get("error") or "OCR service failed")
 
         parsed = data.get("parsed_fields") or {}
+        # Keep image URLs as relative paths (e.g. /ocr_uploads/...) so the
+        # browser loads them from the portal's own origin where ocr_uploads
+        # is mounted, instead of cross-origin requesting http://127.0.0.1:5001.
         face_url = data.get("face_image_url")
-        if face_url and face_url.startswith("/"):
-            face_url = f"{self.ocr_base_url}{face_url}"
         processed_url = data.get("processed_image_url")
-        if processed_url and processed_url.startswith("/"):
-            processed_url = f"{self.ocr_base_url}{processed_url}"
 
         return {
             "document_id": str(doc_entity.document_id),

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=video-mirror-1">
 </head>
 <body>
 
@@ -413,43 +413,37 @@
             <span class="badge badge-warning" id="pipeline-status-badge">QUEUED</span>
           </div>
 
-          <!-- Module 1: Document Face Capture -->
+          <!-- Module 1: live ID capture (mirrored preview CSS, unflipped OCR capture) -->
           <div class="mt-4" id="doc-face-section">
-            <h3>📸 Step 4.1: Document Face Capture</h3>
-            <p class="subtitle">Hold your Aadhaar or PAN card in front of the camera so we can extract the face photo from the document.</p>
-            <div style="text-align:center; position:relative; width:520px; margin:0 auto;">
-              <video id="doc-face-video" width="520" height="390" autoplay muted playsinline style="border-radius:8px; border:2px solid var(--border-color); background:#111; width:520px; height:390px; object-fit:cover;"></video>
-              <canvas id="doc-face-canvas" width="520" height="390" style="position:absolute; left:0; top:0; width:520px; height:390px; pointer-events:none; border-radius:8px;"></canvas>
-              <div id="doc-face-overlay" style="position:absolute; top:0; left:0; width:520px; height:390px; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.5); border-radius:8px;">
-                <button class="btn btn-primary btn-lg" id="btn-start-doc-face" type="button">Start Camera</button>
+            <h3>🪪 Step 4.1: Hold Aadhaar/PAN — Face Extraction</h3>
+            <p class="subtitle">Hold your Aadhaar or PAN card in front of the camera. Preview is mirrored (CSS); the captured frame is not flipped so PaddleOCR + RetinaFace can read the card.</p>
+            <div class="video-container">
+              <video id="doc-face-video" autoplay muted playsinline></video>
+              <div class="video-overlay" id="doc-face-overlay">
+                <button class="btn btn-primary btn-lg" id="btn-start-doc-face" type="button">Allow Camera</button>
               </div>
             </div>
-            <div id="doc-face-result" class="mt-2 hidden" style="text-align:center;">
-              <img id="doc-face-img" style="width:112px; height:112px; object-fit:cover; border-radius:12px; border:3px solid #22c55e;" />
-              <p class="text-muted mt-1">Face extracted from document</p>
+            <div style="text-align:center; margin: 0.75rem 0;">
+              <button class="btn btn-primary hidden" id="btn-capture-doc-face" type="button">Capture &amp; Extract Face</button>
             </div>
-            <div class="alert alert-info mt-2 text-center" id="doc-face-status">Status: Waiting for camera...</div>
+            <div id="doc-face-result" class="mt-2 hidden" style="text-align:center;"></div>
+            <div class="alert alert-info mt-2 text-center" id="doc-face-status">Status: Click Allow Camera, then hold your ID card and capture.</div>
           </div>
 
-          <!-- Module 2: Pupil Tracking with 5 Red Dots -->
-          <div class="mt-4 hidden" id="dot-tracking-section">
-            <h3>👁️ Step 4.2: Live Pupil Tracking (5-Dot Challenge)</h3>
-            <p class="subtitle">Follow the red dots with your eyes. Look directly at each dot as it appears.</p>
+          <!-- Module 2: existing FGI-Net eye tracker (live camera + EyeXYGraph) -->
+          <div class="mt-4 hidden" id="eye-track-section">
+            <h3>👁️ Step 4.2: Live Eye Tracking</h3>
+            <p class="subtitle">Existing FGI-Net module: look straight until center calibration locks. Left is the live camera (CSS mirror). Right is the pupil (x, y) graph from the tracker.</p>
             <div style="display:flex; gap:1rem; justify-content:center; align-items:flex-start; flex-wrap:wrap;">
-              <div style="position:relative; width:520px; height:390px;">
-                <video id="dot-track-video" width="520" height="390" autoplay muted playsinline style="border-radius:8px; border:2px solid var(--border-color); background:#111; width:520px; height:390px; object-fit:cover;"></video>
-                <canvas id="dot-track-overlay" width="520" height="390" style="position:absolute; left:0; top:0; width:520px; height:390px; pointer-events:none; border-radius:8px;"></canvas>
+              <div class="video-container" style="width:480px;">
+                <video id="eye-track-video" autoplay muted playsinline></video>
               </div>
-              <canvas id="dot-challenge-canvas" width="360" height="360" style="border-radius:12px; border:2px solid var(--border-color); background:#0d0f14;"></canvas>
-            </div>
-            <div class="mt-2" style="text-align:center;">
-              <span class="badge badge-info" id="dot-progress-label">Dot 0 / 5</span>
-              <span class="badge badge-secondary" id="dot-direction-label">—</span>
+              <img id="eye-plot-view" width="360" height="360" alt="pupil graph" style="border-radius:8px; border:2px solid var(--border-color); background:#0d0f14; width:360px; height:360px;" />
             </div>
             <div class="progress mt-2" style="height:8px; background:rgba(255,255,255,0.12); border-radius:999px; overflow:hidden;">
-              <div id="dot-progress-bar" style="height:100%; width:0%; background:#ef4444; transition:width 0.3s;"></div>
+              <div id="eye-calib-bar" style="height:100%; width:0%; background:#38bdf8; transition:width 0.2s;"></div>
             </div>
-            <div class="alert alert-info mt-2 text-center" id="dot-track-status">Status: Preparing dot challenge...</div>
+            <div class="alert alert-info mt-2 text-center" id="eye-track-status">Status: Starting eye tracker...</div>
           </div>
 
           <div class="status-timeline mt-4 hidden" id="pipeline-timeline">
@@ -693,6 +687,6 @@
 
   </main>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=eye-live-video-1"></script>
 </body>
 </html>
