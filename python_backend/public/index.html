@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=video-mirror-1">
+  <link rel="stylesheet" href="styles.css?v=gaze-dot-1">
 </head>
 <body>
 
@@ -433,10 +433,11 @@
           <!-- Module 2: existing FGI-Net eye tracker (live camera + EyeXYGraph) -->
           <div class="mt-4 hidden" id="eye-track-section">
             <h3>👁️ Step 4.2: Live Eye Tracking</h3>
-            <p class="subtitle">Existing FGI-Net module: look straight until center calibration locks. Left is the live camera (CSS mirror). Right is the pupil (x, y) graph from the tracker.</p>
+            <p class="subtitle">Look straight until center calibration locks, then follow the red dots (4 random positions: left / right / top / bottom / center). The pupil graph must match each target.</p>
             <div style="display:flex; gap:1rem; justify-content:center; align-items:flex-start; flex-wrap:wrap;">
               <div class="video-container" style="width:480px;">
                 <video id="eye-track-video" autoplay muted playsinline></video>
+                <div id="gaze-target-dot" class="gaze-target-dot hidden" aria-hidden="true"></div>
               </div>
               <img id="eye-plot-view" width="360" height="360" alt="pupil graph" style="border-radius:8px; border:2px solid var(--border-color); background:#0d0f14; width:360px; height:360px;" />
             </div>
@@ -687,6 +688,6 @@
 
   </main>
 
-  <script src="app.js?v=eye-live-video-1"></script>
+  <script src="app.js?v=gaze-challenge-4dot-1"></script>
 </body>
 </html>

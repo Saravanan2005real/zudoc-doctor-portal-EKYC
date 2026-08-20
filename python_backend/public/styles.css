@@ -828,3 +828,21 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: rgba(0, 0, 0, 0.5);
   border-radius: 16px;
 }
+
+.gaze-target-dot {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border-radius: 50%;
+  background: #ef4444;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.35), 0 0 16px #ef4444;
+  z-index: 4;
+  pointer-events: none;
+}
+.gaze-target-dot[data-pos="left"] { left: 10%; top: 50%; }
+.gaze-target-dot[data-pos="right"] { left: 90%; top: 50%; }
+.gaze-target-dot[data-pos="top"] { left: 50%; top: 10%; }
+.gaze-target-dot[data-pos="bottom"] { left: 50%; top: 90%; }
+.gaze-target-dot[data-pos="center"] { left: 50%; top: 50%; }

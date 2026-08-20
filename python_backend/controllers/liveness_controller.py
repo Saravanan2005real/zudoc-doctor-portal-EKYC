@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 import asyncio
 import base64
 import logging
@@ -45,6 +46,7 @@ router = APIRouter(
 class LivenessRequest(BaseModel):
     image: str
     reset: bool = False
+    target: Optional[str] = None
 
 
 def _decode_image(data_url: str):
@@ -63,7 +65,7 @@ def _jpeg_url(img, quality=80):
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
 
 
-def _run_demo_frame(img, reset: bool = False):
+def _run_demo_frame(img, reset: bool = False, target: str = ""):
     """Call the existing EyeTracker + EyeXYGraph exactly like demo.py."""
     global _graph_locked
     global _center_offset_left, _center_offset_right
@@ -114,9 +116,9 @@ def _run_demo_frame(img, reset: bool = False):
             else:
                 graph.push(result.left_xy, result.right_xy)
 
-        # During/after calibration lock, force the label to show CENTER.
-        direction_for_plot = "center" if result.calib_ready else getattr(result, "direction", "")
-        plot_view = graph.render(direction=direction_for_plot)
+        # Use real pupil direction so gaze challenges (left/right/top/bottom) work.
+        direction_for_plot = getattr(result, "direction", "") or ""
+        plot_view = graph.render(direction=direction_for_plot, target=target or "")
         return result, plot_view, direction_for_plot
 
 
@@ -141,12 +143,18 @@ async def check_liveness(req: LivenessRequest):
                 "plot_image": None,
             }
 
-        result, plot_view, direction_for_plot = await asyncio.to_thread(_run_demo_frame, img, req.reset)
+        result, plot_view, direction_for_plot = await asyncio.to_thread(
+            _run_demo_frame, img, req.reset, (req.target or "").strip().lower()
+        )
 
+        looked = (direction_for_plot or "").strip().lower()
+        wanted = (req.target or "").strip().lower()
         return {
             "status": "success",
             "both_eyes_facing": bool(result.both_eyes_facing),
             "direction": direction_for_plot or getattr(result, "direction", "unknown"),
+            "target": wanted or None,
+            "target_hit": bool(wanted and looked == wanted and result.both_eyes_facing),
             "face_detected": bool(getattr(result, "face_detected", False)),
             "calib_ready": bool(getattr(result, "calib_ready", False)),
             "calib_progress": float(getattr(result, "calib_progress", 0.0) or 0.0),
@@ -163,6 +171,7 @@ async def check_liveness(req: LivenessRequest):
 
 class LiveDocRequest(BaseModel):
     image: str
+    step1_face: Optional[str] = None
     step3_faces: list[str] = []
 
 
@@ -174,16 +183,19 @@ async def live_doc_ocr(req: LiveDocRequest):
 
     ocr_url = os.getenv("OCR_SERVICE_URL", "http://127.0.0.1:5001/api/v1/ocr")
     live_url = ocr_url.replace("/api/v1/ocr", "/api/v1/live_verify")
-    base = ocr_url.replace("/api/v1/ocr", "").rstrip("/")
 
     def _call():
-        payload = {"image": req.image, "step3_faces": req.step3_faces or []}
+        payload = {
+            "image": req.image,
+            "step1_face": (req.step1_face or "").strip() or None,
+            "step3_faces": req.step3_faces or [],
+        }
         resp = requests.post(live_url, json=payload, timeout=180)
         try:
-            payload = resp.json()
+            body = resp.json()
         except Exception:
-            payload = {"error": resp.text[:300]}
-        return resp.status_code, payload
+            body = {"error": resp.text[:300]}
+        return resp.status_code, body
 
     try:
         code, data = await asyncio.to_thread(_call)

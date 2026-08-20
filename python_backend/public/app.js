@@ -14,6 +14,8 @@ const state = {
   },
   uploadedDocuments: [],
   inspectingDoctorID: null,
+  ekycResult: null,
+  liveDocResult: null,
 };
 
 const API_BASE = window.location.origin;
@@ -551,7 +553,45 @@ let pipelineRunning = false;
 let module1Running = false;
 let eyeResetPending = true;
 let eyeHold = 0;
-const EYE_HOLD_NEEDED = 8;
+const EYE_HOLD_NEEDED = 6;
+const GAZE_POSITIONS = ['left', 'right', 'top', 'bottom', 'center'];
+let gazeQueue = [];
+let gazeIndex = 0;
+let gazeChallengesStarted = false;
+
+function shuffleGazeTargets() {
+  const pool = GAZE_POSITIONS.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, 4);
+}
+
+function currentGazeTarget() {
+  if (!gazeChallengesStarted || gazeIndex >= gazeQueue.length) return null;
+  return gazeQueue[gazeIndex];
+}
+
+function setGazeDot(pos) {
+  const dot = document.getElementById('gaze-target-dot');
+  if (!dot) return;
+  if (!pos) {
+    dot.classList.add('hidden');
+    dot.removeAttribute('data-pos');
+    return;
+  }
+  dot.setAttribute('data-pos', pos);
+  dot.classList.remove('hidden');
+}
+
+function resetGazeChallenge() {
+  gazeQueue = [];
+  gazeIndex = 0;
+  gazeChallengesStarted = false;
+  eyeHold = 0;
+  setGazeDot(null);
+}
 
 function stopS4Camera() {
   s4Active = false;
@@ -606,21 +646,30 @@ function getStep3FaceFiles() {
     .filter(Boolean);
 }
 
+function getStep1FaceFile() {
+  const faces = getStep3FaceFiles();
+  return faces.length ? faces[0] : null;
+}
+
 function renderModule1Faces(data) {
   const resultDiv = document.getElementById('doc-face-result');
   if (!resultDiv) return;
 
+  const idFaceUrl = data.id_card_face_image_url || null;
   const holderFaceUrl = data.holder_face_image_url || null;
   const fields = data.parsed_fields || {};
-  const name = fields.name || '';
   const rawText = Array.isArray(data.raw_text) ? data.raw_text.filter(Boolean) : [];
 
-  const faceHtml = holderFaceUrl
+  const faceHtml = (idFaceUrl || holderFaceUrl)
     ? `<div style="display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
-        <div style="display:inline-block; margin:0 8px;">
+        ${idFaceUrl ? `<div style="display:inline-block; margin:0 8px;">
+          <img src="${idFaceUrl}" alt="id-face" style="width:112px;height:112px;object-fit:cover;border-radius:12px;border:3px solid #22c55e;" />
+          <p style="color:#111; margin-top:6px; font-weight:600;">ID card face</p>
+        </div>` : ''}
+        ${holderFaceUrl ? `<div style="display:inline-block; margin:0 8px;">
           <img src="${holderFaceUrl}" alt="holder-face" style="width:112px;height:112px;object-fit:cover;border-radius:12px;border:3px solid #2563eb;" />
           <p style="color:#111; margin-top:6px; font-weight:600;">Live holder face</p>
-        </div>
+        </div>` : ''}
       </div>`
     : `<p class="text-muted mb-1">No face crop returned. Hold the card closer and capture again.</p>`;
 
@@ -648,16 +697,32 @@ function renderModule1Faces(data) {
     `
     : '';
 
-  const faceDebug = data.face_debug || {};
-  const debugHtml = `
+  const matchBadge = (val) => {
+    if (val === true) return '<span style="color:#166534;font-weight:700;">MATCHED</span>';
+    if (val === false) return '<span style="color:#991b1b;font-weight:700;">NOT MATCHED</span>';
+    return '<span style="color:#6b7280;font-weight:600;">N/A</span>';
+  };
+
+  const matchRows = Array.isArray(data.face_match_details) && data.face_match_details.length
+    ? data.face_match_details
+    : (Array.isArray(data.step3_face_matches) ? data.step3_face_matches : []);
+
+  const compareHtml = `
     <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
-      <div style="font-weight:700; margin-bottom:0.25rem;">Face Detection Output</div>
+      <div style="font-weight:700; margin-bottom:0.25rem;">Face Cross-Verification (Uploaded vs Live)</div>
       <div style="font-size:0.92rem; background:#f3f4f6; border:1px solid #d1d5db; border-radius:10px; padding:0.75rem;">
-        <div><strong>source:</strong> ${faceDebug.source || data.face_source || 'none'}</div>
-        <div><strong>confidence:</strong> ${faceDebug.confidence ?? '-'}</div>
-        <div><strong>bbox:</strong> ${Array.isArray(faceDebug.bbox) ? faceDebug.bbox.join(', ') : '-'}</div>
-        <div><strong>aligned:</strong> ${faceDebug.aligned === true ? 'yes' : 'no'}</div>
-        <div><strong>landmarks:</strong> ${faceDebug.landmarks ? JSON.stringify(faceDebug.landmarks) : '-'}</div>
+        <div style="margin:0.25rem 0;"><strong>Uploaded vs Live holder:</strong> ${matchBadge(data.face_match_vs_holder ?? data.face_match)}</div>
+        <div style="margin:0.25rem 0;"><strong>Uploaded vs ID card face:</strong> ${matchBadge(data.face_match_vs_id_card)}</div>
+        ${matchRows.length ? matchRows.map((m) => {
+          const ref = m.reference || m.step3_face || 'uploaded face';
+          const vh = m.vs_holder || null;
+          const vi = m.vs_id_card || null;
+          return `<div style="margin:0.4rem 0; padding-top:0.35rem; border-top:1px solid #e5e7eb;">
+            <strong>${ref}</strong>
+            <div>→ holder: ${matchBadge(vh ? vh.verified : m.verified)} ${vh && vh.distance != null ? `(d=${Number(vh.distance).toFixed(3)})` : ''}</div>
+            <div>→ ID card: ${matchBadge(vi ? vi.verified : null)} ${vi && vi.distance != null ? `(d=${Number(vi.distance).toFixed(3)})` : ''}</div>
+          </div>`;
+        }).join('') : '<div class="text-muted" style="margin-top:0.35rem;">No uploaded face was available for comparison. Complete document OCR first.</div>'}
       </div>
     </div>
   `;
@@ -666,32 +731,12 @@ function renderModule1Faces(data) {
     ? `<p class="text-danger mt-2" style="font-weight:600;">Error: ${data.error}</p>`
     : '';
 
-  const matchRows = Array.isArray(data.step3_face_matches) ? data.step3_face_matches : [];
-  const compareHtml = matchRows.length
-    ? `
-      <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
-        <div style="font-weight:700; margin-bottom:0.25rem;">Step 3 vs Step 4.1 Face Cross-Verification</div>
-        <div style="font-size:0.92rem; background:#f3f4f6; border:1px solid #d1d5db; border-radius:10px; padding:0.75rem;">
-          ${matchRows.map((m) => `
-            <div style="margin:0.25rem 0;">
-              <strong>${m.step3_face || 'step3 face'}</strong>:
-              ${m.verified ? '<span style="color:#166534;font-weight:700;">MATCH</span>' : '<span style="color:#991b1b;font-weight:700;">NO MATCH</span>'}
-              ${m.distance !== undefined ? `(distance=${m.distance})` : ''}
-              ${m.error ? ` - ${m.error}` : ''}
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `
-    : '';
-
   resultDiv.innerHTML = `
     <div>
       ${faceHtml}
       ${errorHtml}
-      ${fieldsHtml}
-      ${debugHtml}
       ${compareHtml}
+      ${fieldsHtml}
       ${rawHtml}
     </div>
   `;
@@ -739,27 +784,40 @@ async function captureLiveDoc() {
   }
   if (captureBtn) { captureBtn.disabled = true; captureBtn.innerText = 'Extracting...'; }
   if (statusEl) {
-    statusEl.innerText = 'Status: Sending unflipped frame to existing OCR module (PaddleOCR + RetinaFace)...';
+    statusEl.innerText = 'Status: Waiting for uploaded faces (if needed), then sending live frame to OCR...';
     statusEl.className = 'alert alert-info mt-2 text-center';
   }
   const w = video.videoWidth;
   const h = video.videoHeight;
   const dataUrl = grabFrame(video, w, h);
   try {
+    // Prefer matching against uploaded faces; wait up to 2 min if OCR still running.
+    await ensureUploadedFacesReady(120000);
+    const step3Faces = getStep3FaceFiles();
+    const step1Face = getStep1FaceFile();
+    if (statusEl) {
+      statusEl.innerText = step3Faces.length
+        ? `Status: Matching against ${step3Faces.length} uploaded face(s). Running live RetinaFace...`
+        : 'Status: No uploaded face yet — extracting live faces only...';
+    }
     const resp = await fetch(`${API_BASE}/api/v1/verification/live-doc`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: dataUrl, step3_faces: getStep3FaceFiles() }),
+      body: JSON.stringify({
+        image: dataUrl,
+        step1_face: step1Face || null,
+        step3_faces: step3Faces,
+      }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.error || data.detail || 'Live OCR failed');
 
     state.liveDocResult = data;
     renderModule1Faces(data);
-    const faceOk = !!(data.face_image_url || data.face_image);
+    const faceOk = !!(data.holder_face_image_url || data.id_card_face_image_url || data.face_image_url);
     if (statusEl) {
       statusEl.innerText = faceOk
-        ? 'Status: Face extracted from the card. Starting live eye tracking...'
+        ? 'Status: Live faces extracted. Starting live eye tracking...'
         : 'Status: OCR ran but no face was found. Hold the card closer and capture again.';
       statusEl.className = `alert ${faceOk ? 'alert-success' : 'alert-warning'} mt-2 text-center`;
     }
@@ -803,7 +861,7 @@ async function startModule2() {
   const statusEl = document.getElementById('eye-track-status');
   const bar = document.getElementById('eye-calib-bar');
   eyeResetPending = true;
-  eyeHold = 0;
+  resetGazeChallenge();
   if (bar) bar.style.width = '0%';
 
   try {
@@ -842,7 +900,11 @@ async function pollEyeTrack(gen) {
     const resp = await fetch(`${API_BASE}/api/v1/verification/liveness`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: dataUrl, reset: eyeResetPending }),
+      body: JSON.stringify({
+        image: dataUrl,
+        reset: eyeResetPending,
+        target: currentGazeTarget() || '',
+      }),
     });
     eyeResetPending = false;
     const data = await resp.json().catch(() => ({}));
@@ -852,30 +914,58 @@ async function pollEyeTrack(gen) {
     const pct = Math.round((data.calib_progress || 0) * 100);
     if (bar) bar.style.width = `${pct}%`;
 
-    if (data.calib_ready && data.both_eyes_facing) {
-      eyeHold += 1;
-      if (statusEl) {
-        statusEl.innerText = `Status: Center locked. Looking ${String(data.direction || '').toUpperCase()} (${eyeHold}/${EYE_HOLD_NEEDED})`;
-        statusEl.className = 'alert alert-success mt-2 text-center';
-      }
-      if (eyeHold >= EYE_HOLD_NEEDED) {
-        stopS4Camera();
-        if (statusEl) statusEl.innerText = 'Status: Eye tracking passed. Showing eKYC decision...';
-        document.getElementById('eye-track-section')?.classList.add('hidden');
-        const timeline = document.getElementById('pipeline-timeline');
-        if (timeline) timeline.classList.remove('hidden');
-        applyEkycDecision(state.ekycResult);
-        return;
-      }
-    } else {
-      eyeHold = 0;
+    const looking = String(data.direction || '').toLowerCase();
+
+    // Phase 1: lock center calibration (needed for a stable pupil origin).
+    if (!data.calib_ready) {
+      setGazeDot(null);
       if (statusEl) {
         if (!data.both_eyes_facing) {
           statusEl.innerText = `Status: ${(data.direction || 'no_face').replace(/_/g, ' ')} — both eyes must face the camera.`;
         } else {
-          statusEl.innerText = `Status: Capturing center ${pct}% — look straight.`;
+          statusEl.innerText = `Status: Capturing center ${pct}% — look straight at the camera.`;
         }
         statusEl.className = 'alert alert-warning mt-2 text-center';
+      }
+    } else {
+      if (!gazeChallengesStarted) {
+        gazeQueue = shuffleGazeTargets();
+        gazeIndex = 0;
+        gazeChallengesStarted = true;
+        eyeHold = 0;
+        setGazeDot(currentGazeTarget());
+      }
+
+      const target = currentGazeTarget();
+      const hit = !!(data.target_hit || (data.both_eyes_facing && looking === target));
+      if (hit) {
+        eyeHold += 1;
+      } else {
+        eyeHold = 0;
+      }
+
+      if (statusEl) {
+        const step = gazeIndex + 1;
+        statusEl.innerText = hit
+          ? `Status: Look ${target.toUpperCase()} — matched (${eyeHold}/${EYE_HOLD_NEEDED}) · challenge ${step}/4`
+          : `Status: Look at the RED DOT (${String(target || '').toUpperCase()}). Tracker sees ${looking.replace(/_/g, ' ') || '—'} · challenge ${step}/4`;
+        statusEl.className = `alert ${hit ? 'alert-success' : 'alert-warning'} mt-2 text-center`;
+      }
+
+      if (eyeHold >= EYE_HOLD_NEEDED) {
+        gazeIndex += 1;
+        eyeHold = 0;
+        if (gazeIndex >= gazeQueue.length) {
+          stopS4Camera();
+          setGazeDot(null);
+          if (statusEl) statusEl.innerText = 'Status: Gaze challenges passed. Showing eKYC decision...';
+          document.getElementById('eye-track-section')?.classList.add('hidden');
+          const timeline = document.getElementById('pipeline-timeline');
+          if (timeline) timeline.classList.remove('hidden');
+          applyEkycDecision(state.ekycResult);
+          return;
+        }
+        setGazeDot(currentGazeTarget());
       }
     }
   } catch (err) {
@@ -886,13 +976,53 @@ async function pollEyeTrack(gen) {
   }
 }
 
+async function preloadUploadedFaces() {
+  /** Run OCR on uploaded KYC docs so face crops exist for live match. */
+  if (!state.activeDoctor || !state.activeDoctor.public_id) {
+    throw new Error('Please complete registration first.');
+  }
+  if (state._facePreloadPromise) return state._facePreloadPromise;
+
+  state._facePreloadPromise = (async () => {
+    const resp = await fetch(`${API_BASE}/api/v1/doctors/evaluate-ekyc`, {
+      method: 'POST',
+      headers: { 'X-Doctor-Public-ID': state.activeDoctor.public_id },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || data.detail || 'eKYC evaluation failed');
+    state.ekycResult = data;
+    return data;
+  })().finally(() => {
+    // Allow retry later if it failed
+    if (!state.ekycResult) state._facePreloadPromise = null;
+  });
+
+  return state._facePreloadPromise;
+}
+
+async function ensureUploadedFacesReady(timeoutMs = 120000) {
+  /** Wait briefly for background OCR faces before live match. */
+  if (getStep3FaceFiles().length) return getStep3FaceFiles();
+  try {
+    const p = preloadUploadedFaces();
+    const timed = Promise.race([
+      p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('Uploaded face OCR timed out')), timeoutMs)),
+    ]);
+    await timed;
+  } catch (err) {
+    console.warn('ensureUploadedFacesReady:', err);
+  }
+  return getStep3FaceFiles();
+}
+
 function beginStep4() {
   stopS4Camera();
   resetPipelineUI();
-  state.ekycResult = null;
   state.liveDocResult = null;
+  state._facePreloadPromise = null;
   module1Running = false;
-  eyeHold = 0;
+  resetGazeChallenge();
   const docSection = document.getElementById('doc-face-section');
   const eyeSection = document.getElementById('eye-track-section');
   const docResult = document.getElementById('doc-face-result');
@@ -907,11 +1037,30 @@ function beginStep4() {
   if (overlay) overlay.style.display = 'flex';
   if (startBtn) { startBtn.disabled = false; startBtn.innerText = 'Allow Camera'; }
   if (captureBtn) { captureBtn.classList.add('hidden'); captureBtn.disabled = false; captureBtn.innerText = 'Capture & Extract Face'; }
+  if (timeline) timeline.classList.add('hidden');
   if (docStatus) {
-    docStatus.innerText = 'Status: Click Allow Camera, then hold your ID card and capture.';
+    docStatus.innerText = 'Status: Click Allow Camera. Uploaded faces extract in the background for matching.';
     docStatus.className = 'alert alert-info mt-2 text-center';
   }
-  if (timeline) timeline.classList.add('hidden');
+
+  // Non-blocking: do not freeze the UI on OCR (can take 30–90s+).
+  preloadUploadedFaces()
+    .then(() => {
+      const faces = getStep3FaceFiles();
+      if (docStatus && !s4Active) {
+        docStatus.innerText = faces.length
+          ? `Status: ${faces.length} uploaded face(s) ready. Click Allow Camera, hold your ID, then Capture.`
+          : 'Status: OCR finished but no face crop on uploaded docs. Live capture still works; match may be N/A.';
+        docStatus.className = `alert ${faces.length ? 'alert-success' : 'alert-warning'} mt-2 text-center`;
+      }
+    })
+    .catch((err) => {
+      console.error('Background uploaded-face OCR failed:', err);
+      if (docStatus && !s4Active) {
+        docStatus.innerText = `Status: Uploaded-face OCR failed (${err.message || err}). You can still capture; match may be N/A.`;
+        docStatus.className = 'alert alert-warning mt-2 text-center';
+      }
+    });
 }
 window.beginStep4 = beginStep4;
 
@@ -984,16 +1133,32 @@ function renderEkycResults(documents) {
       </div>`;
   }).join('');
 
-  // Show Step 4.1 live holder crop below Step 3 eKYC cards when available.
-  if (state.liveDocResult && state.liveDocResult.holder_face_image_url) {
+  // Show Step 4.1 crops + match below Step 3 eKYC cards when available.
+  if (state.liveDocResult && (state.liveDocResult.holder_face_image_url || state.liveDocResult.id_card_face_image_url)) {
+    const live = state.liveDocResult;
+    const badge = (val) => {
+      if (val === true) return '<span class="badge badge-success">MATCHED</span>';
+      if (val === false) return '<span class="badge badge-danger">NOT MATCHED</span>';
+      return '<span class="badge">N/A</span>';
+    };
     cards.innerHTML += `
       <div class="glass-card" style="padding:1rem; grid-column:1 / -1;">
-        <div style="font-weight:700; color:#111; margin-bottom:0.6rem;">Step 4.1 Face Crops</div>
-        <div style="display:flex; gap:14px; flex-wrap:wrap;">
-          <div>
-            <img src="${state.liveDocResult.holder_face_image_url}" alt="step4-holder-face" style="width:112px;height:112px;object-fit:cover;border-radius:8px;border:2px solid #2563eb;" />
-            <div style="color:#111; font-size:0.9rem; margin-top:4px;">Live holder face</div>
-          </div>
+        <div style="font-weight:700; color:#111; margin-bottom:0.6rem;">Step 4.1 Face Crops & Cross-Verification</div>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:0.75rem;">
+          ${live.id_card_face_image_url ? `
+            <div>
+              <img src="${live.id_card_face_image_url}" alt="step4-id-face" style="width:112px;height:112px;object-fit:cover;border-radius:8px;border:2px solid #16a34a;" />
+              <div style="color:#111; font-size:0.9rem; margin-top:4px;">ID card face</div>
+            </div>` : ''}
+          ${live.holder_face_image_url ? `
+            <div>
+              <img src="${live.holder_face_image_url}" alt="step4-holder-face" style="width:112px;height:112px;object-fit:cover;border-radius:8px;border:2px solid #2563eb;" />
+              <div style="color:#111; font-size:0.9rem; margin-top:4px;">Live holder face</div>
+            </div>` : ''}
+        </div>
+        <div style="color:#111; font-size:0.92rem;">
+          <div><strong>Uploaded vs Live holder:</strong> ${badge(live.face_match_vs_holder ?? live.face_match)}</div>
+          <div style="margin-top:0.25rem;"><strong>Uploaded vs ID card face:</strong> ${badge(live.face_match_vs_id_card)}</div>
         </div>
       </div>
     `;
@@ -1003,12 +1168,18 @@ function renderEkycResults(documents) {
 }
 
 function applyEkycDecision(data) {
+  // Prefer already-preloaded OCR result from beginStep4; otherwise fetch now.
   if (!data) {
-    startPipelineAnimation();
-    return;
+    if (state.ekycResult) {
+      data = state.ekycResult;
+    } else {
+      startPipelineAnimation();
+      return;
+    }
   }
+  state.ekycResult = data;
   resetPipelineUI();
-  logPipe('[STEP 4.1] OCR + face extraction already completed by the existing module.');
+  logPipe('[STEP 4.1] Uploaded-doc OCR + live face extraction completed.');
   logPipe('[STEP 4.2] 5-dot pupil tracking passed.');
   (data.stages || []).forEach((stage) => {
     activateStage(stage.id, stage.status, stage.detail);
@@ -1028,9 +1199,14 @@ function applyEkycDecision(data) {
   }
   const conf = data.decision ? data.decision.ocr_confidence : '-';
   const nameScore = data.decision ? data.decision.name_match_score : '-';
+  const faceMatch = state.liveDocResult
+    ? (state.liveDocResult.face_match_vs_holder ?? state.liveDocResult.face_match)
+    : null;
+  const faceLabel = faceMatch === true ? 'MATCHED' : (faceMatch === false ? 'NOT MATCHED' : 'N/A');
   document.getElementById('pipeline-decision-desc').innerText =
-    `Decision: ${decision} (OCR ${conf}%, Name Match ${nameScore}%)`;
+    `Decision: ${decision} (OCR ${conf}%, Name Match ${nameScore}%, Face ${faceLabel})`;
   logPipe(`[DECISION] ${data.message || decision}`);
+  logPipe(`[FACE] Uploaded vs live holder: ${faceLabel}`);
   if (decision === 'AUTO_VERIFIED' || decision === 'MANUAL_REVIEW') {
     document.getElementById('btn-goto-prescription').classList.remove('hidden');
     if (state.activeDoctor) {
@@ -1065,6 +1241,7 @@ async function startPipelineAnimation() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'eKYC evaluation failed');
 
+    state.ekycResult = data;
     logPipe(`[CONNECTED] Portal ⇄ OCR microservice responded OK`);
     (data.stages || []).forEach((stage) => {
       activateStage(stage.id, stage.status, stage.detail);

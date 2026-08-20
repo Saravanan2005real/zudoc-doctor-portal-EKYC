@@ -48,7 +48,7 @@ class EyeXYGraph:
         py = int(m + (y + 1.0) * 0.5 * usable_h)
         return px, py
 
-    def render(self, direction: str = "") -> np.ndarray:
+    def render(self, direction: str = "", target: str = "") -> np.ndarray:
         canvas = np.full((self.height, self.width, 3), 28, dtype=np.uint8)
         m = self.margin
 
@@ -113,6 +113,27 @@ class EyeXYGraph:
         # Left = orange-ish, Right = blue-ish (BGR)
         draw_trail(self.left_hist, (40, 160, 255))
         draw_trail(self.right_hist, (255, 160, 40))
+
+        target_xy = {
+            "left": (-0.75, 0.0),
+            "right": (0.75, 0.0),
+            "top": (0.0, -0.75),
+            "bottom": (0.0, 0.75),
+            "center": (0.0, 0.0),
+        }.get((target or "").lower())
+        if target_xy is not None:
+            tp = self._to_pixel(*target_xy)
+            cv2.circle(canvas, tp, 18, (40, 40, 255), 3)
+            cv2.circle(canvas, tp, 8, (0, 0, 255), -1)
+            cv2.putText(
+                canvas,
+                f"LOOK {str(target).upper()}",
+                (m, self.height - 64),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (40, 40, 255),
+                2,
+            )
 
         if direction and direction not in ("no_face", "no_eyes", "turn_to_camera"):
             cv2.putText(

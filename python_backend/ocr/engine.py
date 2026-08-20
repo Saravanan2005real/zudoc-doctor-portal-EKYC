@@ -140,6 +140,29 @@ def _save_jpg(path: str, img) -> bool:
     except Exception:
         return False
 
+
+def _json_safe(obj):
+    """Convert numpy / nested RetinaFace values into plain JSON types."""
+    if obj is None or isinstance(obj, (str, bool, int)):
+        return obj
+    if isinstance(obj, float):
+        return float(obj)
+    # numpy scalars (float32, int64, bool_, etc.)
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return _json_safe(obj.tolist())
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    # Fallback: stringify unknown objects rather than crash jsonify
+    try:
+        json.dumps(obj)
+        return obj
+    except Exception:
+        return str(obj)
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -570,9 +593,12 @@ HTML_TEMPLATE = """
 
                     results.style.display = 'block';
                     
+                    // Always persist the uploaded face crop for live cross-verify.
+                    if (step1FaceFilename) {
+                        localStorage.setItem('step1FaceFilename', step1FaceFilename);
+                    }
                     // Show proceed button if validation passes
                     if (isValid) {
-                        localStorage.setItem('step1FaceFilename', step1FaceFilename);
                         document.getElementById('proceed-btn').style.display = 'block';
                     } else {
                         document.getElementById('proceed-btn').style.display = 'none';
@@ -913,12 +939,15 @@ STEP2_HTML_TEMPLATE = """
                     validBadge.innerText = isValid ? 'VALID' : 'INVALID';
                     
                     const faceMatchBadge = document.getElementById('res-face-match');
-                    if (data.face_match !== undefined) {
-                        faceMatchBadge.className = data.face_match ? 'badge badge-success' : 'badge badge-error';
-                        faceMatchBadge.innerText = data.face_match ? 'MATCHED' : 'NOT MATCHED';
+                    if (data.face_match === true) {
+                        faceMatchBadge.className = 'badge badge-success';
+                        faceMatchBadge.innerText = 'MATCHED';
+                    } else if (data.face_match === false) {
+                        faceMatchBadge.className = 'badge badge-error';
+                        faceMatchBadge.innerText = 'NOT MATCHED';
                     } else {
                         faceMatchBadge.className = 'badge';
-                        faceMatchBadge.innerText = 'N/A';
+                        faceMatchBadge.innerText = 'N/A (no uploaded face)';
                     }
                     
                     if (data.face_image_url) {
@@ -1270,6 +1299,60 @@ def _face_detection_candidates(primary_bgr, original_bgr=None):
     return candidates
 
 
+def _square_face_crop_coords(x1, y1, x2, y2, iw, ih):
+    """
+    Expand RetinaFace box (20% L/R, 40% top, 30% bottom), then a square
+    centered on the face with side = max(orig_w, orig_h) * 1.5.
+    """
+    bw = max(1, int(x2 - x1))
+    bh = max(1, int(y2 - y1))
+    left_pad = int(bw * 0.20)
+    right_pad = int(bw * 0.20)
+    top_pad = int(bh * 0.40)
+    bottom_pad = int(bh * 0.30)
+    ex1 = int(x1) - left_pad
+    ey1 = int(y1) - top_pad
+    ex2 = int(x2) + right_pad
+    ey2 = int(y2) + bottom_pad
+    ew = max(1, ex2 - ex1)
+    eh = max(1, ey2 - ey1)
+    size = int(max(max(bw, bh) * 1.5, ew, eh))
+    cx = (int(x1) + int(x2)) / 2.0
+    cy = (int(y1) + int(y2)) / 2.0
+    half = size / 2.0
+    sx1 = int(round(cx - half))
+    sy1 = int(round(cy - half))
+    sx2 = sx1 + size
+    sy2 = sy1 + size
+    if sx1 < 0:
+        sx2 -= sx1
+        sx1 = 0
+    if sy1 < 0:
+        sy2 -= sy1
+        sy1 = 0
+    if sx2 > iw:
+        sx1 -= (sx2 - iw)
+        sx2 = iw
+    if sy2 > ih:
+        sy1 -= (sy2 - ih)
+        sy2 = ih
+    sx1 = max(0, sx1)
+    sy1 = max(0, sy1)
+    sx2 = min(iw, sx2)
+    sy2 = min(ih, sy2)
+    if sx2 <= sx1 or sy2 <= sy1:
+        return None
+    return sx1, sy1, sx2, sy2
+
+
+def _save_debug_crop(crop):
+    try:
+        path = os.path.join(app.config.get("UPLOAD_FOLDER") or UPLOAD_FOLDER, "debug_crop.jpg")
+        cv2.imwrite(path, crop)
+    except Exception:
+        pass
+
+
 def _opencv_face_fallback(img_bgr):
     """
     Last-resort fallback if RetinaFace misses.
@@ -1284,16 +1367,16 @@ def _opencv_face_fallback(img_bgr):
         if faces is None or len(faces) == 0:
             return None
         x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-        pad_x = int(0.22 * w)
-        pad_y = int(0.28 * h)
-        x1 = max(0, x - pad_x)
-        y1 = max(0, y - pad_y)
-        x2 = min(img_bgr.shape[1], x + w + pad_x)
-        y2 = min(img_bgr.shape[0], y + h + pad_y)
+        ih, iw = img_bgr.shape[:2]
+        box = _square_face_crop_coords(x, y, x + w, y + h, iw, ih)
+        if box is None:
+            return None
+        x1, y1, x2, y2 = box
         crop = img_bgr[y1:y2, x1:x2]
         if crop.size == 0:
             return None
-        return cv2.resize(crop, (112, 112)), {
+        _save_debug_crop(crop)
+        return cv2.resize(crop, (112, 112), interpolation=cv2.INTER_AREA), {
             "source": "opencv_haar",
             "confidence": None,
             "bbox": [int(x1), int(y1), int(x2), int(y2)],
@@ -1319,53 +1402,61 @@ def _to_3point(landmarks):
 
 
 def _align_and_crop_from_detection(img_bgr, det):
+    """
+    Original image → RetinaFace bbox → expand (20/20/40/30) → square crop
+    → eye alignment on that crop → final square → 112×112.
+    Never resize before padding/crop.
+    """
     facial_area = det.get("facial_area") or det.get("bbox")
     landmarks = det.get("landmarks")
     if not facial_area or len(facial_area) != 4:
         return None, None
 
     x1, y1, x2, y2 = [int(v) for v in facial_area]
-    h, w = img_bgr.shape[:2]
-    x1 = max(0, min(w - 1, x1))
-    y1 = max(0, min(h - 1, y1))
-    x2 = max(0, min(w, x2))
-    y2 = max(0, min(h, y2))
+    ih, iw = img_bgr.shape[:2]
     if x2 <= x1 or y2 <= y1:
         return None, None
 
-    # Expand bbox a little so full face is kept.
-    bw = x2 - x1
-    bh = y2 - y1
-    px = int(0.18 * bw)
-    py = int(0.22 * bh)
-    ex1 = max(0, x1 - px)
-    ey1 = max(0, y1 - py)
-    ex2 = min(w, x2 + px)
-    ey2 = min(h, y2 + py)
-
-    crop = img_bgr[ey1:ey2, ex1:ex2]
+    box = _square_face_crop_coords(x1, y1, x2, y2, iw, ih)
+    if box is None:
+        return None, None
+    sx1, sy1, sx2, sy2 = box
+    crop = img_bgr[sy1:sy2, sx1:sx2]
     if crop.size == 0:
         return None, None
+
+    _save_debug_crop(crop)
 
     aligned = False
     three = _to_3point(landmarks)
     if three is not None:
-        # Align face by mapping (left_eye, right_eye, nose) to canonical points.
-        src = np.float32([
-            [three[0][0] - ex1, three[0][1] - ey1],
-            [three[1][0] - ex1, three[1][1] - ey1],
-            [three[2][0] - ex1, three[2][1] - ey1],
-        ])
-        dst = np.float32([[38.0, 40.0], [74.0, 40.0], [56.0, 72.0]])
-        try:
-            M = cv2.getAffineTransform(src, dst)
-            aligned_face = cv2.warpAffine(crop, M, (112, 112), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+        le_x = float(three[0][0] - sx1)
+        le_y = float(three[0][1] - sy1)
+        re_x = float(three[1][0] - sx1)
+        re_y = float(three[1][1] - sy1)
+        dx = re_x - le_x
+        dy = re_y - le_y
+        if abs(dx) > 1e-3:
+            angle = float(np.degrees(np.arctan2(dy, dx)))
+            ch, cw = crop.shape[:2]
+            M = cv2.getRotationMatrix2D((cw / 2.0, ch / 2.0), angle, 1.0)
+            crop = cv2.warpAffine(
+                crop, M, (cw, ch),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
             aligned = True
-            return aligned_face, aligned
-        except Exception:
-            pass
 
-    return cv2.resize(crop, (112, 112)), aligned
+    # Final square crop from the (possibly rotated) expanded region.
+    ch, cw = crop.shape[:2]
+    side = min(ch, cw)
+    y0 = (ch - side) // 2
+    x0 = (cw - side) // 2
+    final = crop[y0:y0 + side, x0:x0 + side]
+    if final.size == 0:
+        final = crop
+
+    return cv2.resize(final, (112, 112), interpolation=cv2.INTER_AREA), aligned
 
 
 def _detect_faces_on_image(img_bgr, source_label="frame"):
@@ -1487,8 +1578,20 @@ def extract_holder_and_id_card_faces(full_bgr, doc_bgr=None, warped_ok=False):
             if f["area"] < holder_area * 0.55 and f["area"] >= min_id_area
         ]
         if smaller:
-            # Among small faces, take the largest (best ID-photo crop)
-            pick = max(smaller, key=lambda f: f["area"])
+            # Prefer the smaller face farthest from the holder's center
+            # (printed ID photo is usually away from the live face).
+            hb = holder_meta.get("bbox") or [0, 0, 0, 0]
+            hcx = (hb[0] + hb[2]) / 2.0
+            hcy = (hb[1] + hb[3]) / 2.0
+
+            def _id_score(f):
+                bb = (f.get("meta") or {}).get("bbox") or [0, 0, 0, 0]
+                cx = (bb[0] + bb[2]) / 2.0
+                cy = (bb[1] + bb[3]) / 2.0
+                dist = ((cx - hcx) ** 2 + (cy - hcy) ** 2) ** 0.5
+                return (dist, f["area"])
+
+            pick = max(smaller, key=_id_score)
             id_face = pick["face"]
             id_meta = {**pick["meta"], "role": "id_card"}
         elif len(frame_faces) >= 2:
@@ -2257,6 +2360,147 @@ def index():
 def live_verification():
     return render_template_string(STEP2_HTML_TEMPLATE)
 
+def _resolve_upload_face_path(filename):
+    """Resolve a face filename inside the OCR upload folder."""
+    if not filename:
+        return None
+    name = os.path.basename(str(filename).strip())
+    if not name or name in (".", ".."):
+        return None
+    path = os.path.join(app.config["UPLOAD_FOLDER"], name)
+    return path if os.path.isfile(path) else None
+
+
+def _verify_face_pair(path_a, path_b):
+    """
+    Cross-verify two already-cropped face images (112x112).
+    Prefer ArcFace; fall back to DeepFace default if ArcFace is unavailable.
+    """
+    if DeepFace is None or not path_a or not path_b:
+        return None
+    try:
+        result = DeepFace.verify(
+            img1_path=path_a,
+            img2_path=path_b,
+            model_name="ArcFace",
+            enforce_detection=False,
+        )
+        return {
+            "verified": bool(result.get("verified", False)),
+            "distance": float(result["distance"]) if result.get("distance") is not None else None,
+            "threshold": float(result["threshold"]) if result.get("threshold") is not None else None,
+            "model": "ArcFace",
+        }
+    except Exception as e1:
+        print(f"ArcFace verify failed ({e1}); trying default DeepFace model")
+        try:
+            result = DeepFace.verify(
+                img1_path=path_a,
+                img2_path=path_b,
+                enforce_detection=False,
+            )
+            return {
+                "verified": bool(result.get("verified", False)),
+                "distance": float(result["distance"]) if result.get("distance") is not None else None,
+                "threshold": float(result["threshold"]) if result.get("threshold") is not None else None,
+                "model": "default",
+            }
+        except Exception as e2:
+            print(f"DeepFace verification failed: {e2}")
+            return {"verified": False, "error": str(e2), "model": None}
+
+
+def _collect_reference_faces(data):
+    """
+    Uploaded-document face crops used as Step-1 / Step-3 references.
+    Accepts step1_face (string) and/or step3_faces (list).
+    """
+    refs = []
+    seen = set()
+
+    def _add(label, raw):
+        name = os.path.basename(str(raw or "").strip())
+        if not name or name in seen:
+            return
+        path = _resolve_upload_face_path(name)
+        if not path:
+            return
+        seen.add(name)
+        refs.append({"label": label, "filename": name, "path": path})
+
+    step1 = data.get("step1_face") if isinstance(data, dict) else None
+    if step1:
+        _add("step1", step1)
+
+    step3 = data.get("step3_faces") if isinstance(data, dict) else None
+    if isinstance(step3, list):
+        for item in step3:
+            _add("step3", item)
+
+    return refs
+
+
+def _cross_verify_uploaded_vs_live(refs, holder_filename, id_filename):
+    """
+    Cross-verify each uploaded face against:
+      - live holder face (person in front of camera)  → primary identity match
+      - live ID-card printed face                    → card photo match
+
+    face_match (overall) is True when ANY uploaded face matches the live HOLDER.
+    """
+    holder_path = _resolve_upload_face_path(holder_filename)
+    id_path = _resolve_upload_face_path(id_filename)
+
+    details = []
+    any_holder_match = None
+    any_id_match = None
+
+    for ref in refs:
+        row = {
+            "reference": ref["filename"],
+            "source": ref["label"],
+            "vs_holder": None,
+            "vs_id_card": None,
+        }
+        if holder_path:
+            vh = _verify_face_pair(ref["path"], holder_path)
+            row["vs_holder"] = vh
+            if vh is not None and "error" not in vh:
+                if vh.get("verified"):
+                    any_holder_match = True
+                elif any_holder_match is None:
+                    any_holder_match = False
+        if id_path:
+            vi = _verify_face_pair(ref["path"], id_path)
+            row["vs_id_card"] = vi
+            if vi is not None and "error" not in vi:
+                if vi.get("verified"):
+                    any_id_match = True
+                elif any_id_match is None:
+                    any_id_match = False
+        details.append(row)
+
+    return {
+        "face_match": any_holder_match,  # Step1/upload vs live person
+        "face_match_vs_holder": any_holder_match,
+        "face_match_vs_id_card": any_id_match,
+        "face_match_details": details,
+        # Back-compat list used by portal UI
+        "step3_face_matches": [
+            {
+                "step3_face": d["reference"],
+                "verified": bool((d.get("vs_holder") or {}).get("verified"))
+                or bool((d.get("vs_id_card") or {}).get("verified")),
+                "vs_holder": d.get("vs_holder"),
+                "vs_id_card": d.get("vs_id_card"),
+                "distance": (d.get("vs_holder") or {}).get("distance"),
+                "threshold": (d.get("vs_holder") or {}).get("threshold"),
+            }
+            for d in details
+        ],
+    }
+
+
 @app.route('/api/v1/live_verify', methods=['POST'])
 def live_verify_api():
     data = request.json
@@ -2275,8 +2519,10 @@ def live_verify_api():
 
         filename_id = str(uuid.uuid4())
         
-        # 1. Face Extraction (RetinaFace) — Step 4.1
-        # Person holds ID: largest face = live holder, smaller face = photo on card.
+        # ── Face extraction (RetinaFace) ──────────────────────────────────
+        # Live frame → two faces:
+        #   A) live holder (largest face)
+        #   B) printed photo on the ID card being held (smaller face)
         doc_img, warped_ok = detect_and_warp_document(img)
         id_face_img, id_face_meta, holder_face_img, holder_face_meta = (
             extract_holder_and_id_card_faces(img, doc_img, warped_ok)
@@ -2296,7 +2542,7 @@ def live_verify_api():
             if _save_jpg(holder_face_path, holder_face_img):
                 holder_face_filename = candidate
 
-        # 2. OCR-safe enhance + best pass
+        # OCR on the held document region
         best_img, extracted_lines, _scores, _avg, parsed_fields, _label = best_ocr_pass(
             doc_img, app.config['UPLOAD_FOLDER'], filename_id
         )
@@ -2306,53 +2552,16 @@ def live_verify_api():
         if not _save_jpg(doc_path, best_img):
             return jsonify({"status": "failed", "error": "Failed to save processed live document image"}), 500
 
-        # 3. Face Matching (Step 1 vs Live + Step3 doc faces vs Step4.1 extracted face)
-        face_match_result = None
-        step1_face_filename = data.get('step1_face')
-        compare_target_filename = id_face_filename or holder_face_filename
-        if step1_face_filename and compare_target_filename and DeepFace is not None:
-            step1_face_path = os.path.join(app.config['UPLOAD_FOLDER'], step1_face_filename)
-            live_face_path = os.path.join(app.config['UPLOAD_FOLDER'], compare_target_filename)
-            if os.path.exists(step1_face_path) and os.path.exists(live_face_path):
-                try:
-                    # Enforce detection=False because we already cropped the faces to 112x112 using RetinaFace
-                    result = DeepFace.verify(img1_path=step1_face_path, img2_path=live_face_path, enforce_detection=False)
-                    face_match_result = result.get("verified", False)
-                except Exception as e:
-                    print(f"DeepFace verification failed: {e}")
+        # ── Cross-verification ────────────────────────────────────────────
+        # Uploaded doc face(s)  ↔  live holder face  (primary)
+        # Uploaded doc face(s)  ↔  live ID-card face (secondary)
+        refs = _collect_reference_faces(data)
+        match_payload = _cross_verify_uploaded_vs_live(
+            refs, holder_face_filename, id_face_filename
+        )
 
-        step3_face_matches = []
-        step3_faces = data.get('step3_faces') or []
-        if DeepFace is not None and compare_target_filename and isinstance(step3_faces, list):
-            compare_target_path = os.path.join(app.config['UPLOAD_FOLDER'], compare_target_filename)
-            if os.path.exists(compare_target_path):
-                for step3_face in step3_faces:
-                    try:
-                        step3_name = os.path.basename(str(step3_face))
-                        step3_path = os.path.join(app.config['UPLOAD_FOLDER'], step3_name)
-                        if not os.path.exists(step3_path):
-                            continue
-                        vr = DeepFace.verify(
-                            img1_path=step3_path,
-                            img2_path=compare_target_path,
-                            enforce_detection=False,
-                        )
-                        step3_face_matches.append({
-                            "step3_face": step3_name,
-                            "verified": bool(vr.get("verified", False)),
-                            "distance": vr.get("distance"),
-                            "threshold": vr.get("threshold"),
-                        })
-                    except Exception as e:
-                        step3_face_matches.append({
-                            "step3_face": os.path.basename(str(step3_face)),
-                            "verified": False,
-                            "error": str(e),
-                        })
-
-        return jsonify({
+        return jsonify(_json_safe({
             "status": "success",
-            # Backward compatibility: keep face_image_url as ID-card extracted face
             "face_image_url": f"/ocr_uploads/{id_face_filename}" if id_face_filename else None,
             "id_card_face_image_url": f"/ocr_uploads/{id_face_filename}" if id_face_filename else None,
             "holder_face_image_url": f"/ocr_uploads/{holder_face_filename}" if holder_face_filename else None,
@@ -2362,9 +2571,13 @@ def live_verify_api():
             "processed_image_url": f"/ocr_uploads/{doc_filename}",
             "parsed_fields": parsed_fields,
             "raw_text": extracted_lines,
-            "face_match": face_match_result,
-            "step3_face_matches": step3_face_matches,
-        })
+            "face_match": match_payload["face_match"],
+            "face_match_vs_holder": match_payload["face_match_vs_holder"],
+            "face_match_vs_id_card": match_payload["face_match_vs_id_card"],
+            "face_match_details": match_payload["face_match_details"],
+            "step3_face_matches": match_payload["step3_face_matches"],
+            "reference_faces_used": [r["filename"] for r in refs],
+        }))
         
     except Exception as e:
         import traceback
@@ -2420,19 +2633,19 @@ def run_ocr():
         if not _save_jpg(pipeline_path, processed_img):
             return jsonify({"status": "failed", "error": "Failed to save OCR processed image"}), 500
 
-        return jsonify({
+        return jsonify(_json_safe({
             "status": "success",
             "quality_check": quality_report,
             "perspective_corrected": warped_ok,
             "ocr_pass": ocr_pass,
             "raw_text": extracted_lines,
-            "ocr_confidence": round(avg_confidence * 100, 2),
+            "ocr_confidence": round(float(avg_confidence) * 100, 2),
             "parsed_fields": parsed_fields,
             "processed_image_url": f"/ocr_uploads/{pipeline_filename}",
             "face_image_url": f"/ocr_uploads/{face_filename}" if face_filename else None,
             "face_source": face_meta.get("source"),
             "face_debug": face_meta,
-        })
+        }))
 
     except Exception as e:
         import traceback
