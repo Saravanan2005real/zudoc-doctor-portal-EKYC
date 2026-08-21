@@ -19,7 +19,7 @@ async def evaluate_ekyc(
 ):
     """
     Step 4 evaluation:
-    Runs uploaded KYC documents through the OCR microservice and returns
+    Runs uploaded KYC documents through in-process OCR and returns
     a staged decision used by the portal before unlocking Step 5.
     """
     if not x_doctor_public_id:

@@ -7,7 +7,6 @@ AUTO_VERIFIED / MANUAL_REVIEW / FAILED.
 """
 import os
 import re
-import requests
 from datetime import datetime, timezone
 from entities.doctor import DoctorStatus
 from entities.history import VerificationHistory
@@ -21,10 +20,8 @@ class DefaultEkycEvaluationService:
         self.doctorRepo = doctor_repo
         self.docRepo = doc_repo
         self.historyRepo = history_repo
-        self.ocr_service_url = ocr_service_url or os.getenv(
-            "OCR_SERVICE_URL", "http://127.0.0.1:5001/api/v1/ocr"
-        )
-        self.ocr_base_url = self.ocr_service_url.replace("/api/v1/ocr", "").rstrip("/")
+        self.ocr_service_url = ocr_service_url  # unused; OCR runs in-process
+        self.ocr_base_url = "in-process"
         self.uploads_dir = uploads_dir or os.path.join(os.path.dirname(__file__), "..", "uploads")
         self.uploads_dir = os.path.abspath(self.uploads_dir)
 
@@ -34,7 +31,7 @@ class DefaultEkycEvaluationService:
         if not doc:
             raise Exception("doctor account not found")
 
-        # Health-check OCR microservice before heavy work
+        # Load OCR in this process (no port 5001)
         try:
             self._ensure_ocr_ready()
         except Exception as e:
@@ -43,14 +40,14 @@ class DefaultEkycEvaluationService:
                 2,
                 "eKYC OCR + Face Extraction",
                 "failed",
-                f"Cannot reach OCR microservice at {self.ocr_base_url}. Start it with: python -m ocr.engine ({e})",
+                f"OCR engine failed to load ({e})",
             ))
             return self._finalize(
                 doc,
                 "MANUAL_REVIEW",
                 stages,
                 [],
-                [f"OCR service unreachable at {self.ocr_base_url}"],
+                [f"OCR engine failed to load: {e}"],
             )
 
         stages.append(self._stage(1, "Application Submitted", "done", "Doctor verification package loaded"))
@@ -68,7 +65,7 @@ class DefaultEkycEvaluationService:
             2,
             "eKYC OCR + Face Extraction",
             "running",
-            f"Sending {len(target_docs)} document(s) to OCR microservice",
+            f"Running OCR + face extraction on {len(target_docs)} document(s)",
         ))
 
         document_results = []
@@ -228,25 +225,8 @@ class DefaultEkycEvaluationService:
             "public_id": str(doc.public_id),
         }
 
-    def _ensure_ocr_ready(self, attempts: int = 8) -> None:
-        last_err = None
-        for i in range(attempts):
-            try:
-                health = requests.get(f"{self.ocr_base_url}/health", timeout=3)
-                if health.status_code >= 400:
-                    health = requests.get(f"{self.ocr_base_url}/", timeout=3)
-                if health.status_code < 500:
-                    return
-                last_err = Exception(f"OCR service unhealthy (HTTP {health.status_code})")
-            except Exception as e:
-                last_err = e
-            if i < attempts - 1:
-                import time
-                time.sleep(1.5 * (i + 1))
-        raise Exception(
-            f"Cannot reach OCR microservice at {self.ocr_base_url}. "
-            f"Start it with: python -m ocr.engine ({last_err})"
-        )
+    def _ensure_ocr_ready(self) -> None:
+        import ocr.engine  # noqa: F401
 
     def _run_ocr_on_document(self, doc_entity) -> dict:
         local_path = self._resolve_local_path(doc_entity.file_url)
@@ -254,27 +234,26 @@ class DefaultEkycEvaluationService:
             raise Exception(f"stored file not found for {self._doc_type(doc_entity)} at {local_path}")
 
         filename = os.path.basename(local_path)
-        mime = doc_entity.mime_type or "application/octet-stream"
         doc_type = self._doc_type(doc_entity)
+        from ocr.inproc import post_ocr
+        with open(local_path, "rb") as f:
+            raw = f.read()
         last_err = None
         data = None
         for attempt in range(3):
             try:
-                with open(local_path, "rb") as f:
-                    files = {"file": (filename, f, mime)}
-                    form = {"document_type": doc_type}
-                    resp = requests.post(self.ocr_service_url, files=files, data=form, timeout=300)
-                if resp.status_code >= 400:
-                    raise Exception(f"OCR service HTTP {resp.status_code}: {resp.text[:300]}")
-                data = resp.json()
+                code, data = post_ocr(raw, filename, doc_type)
+                if code >= 400:
+                    raise Exception(f"OCR HTTP {code}: {str(data)[:300]}")
                 break
             except Exception as e:
                 last_err = e
+                data = None
                 if attempt < 2:
                     import time
                     time.sleep(2)
         if data is None:
-            raise Exception(str(last_err) if last_err else "OCR service failed")
+            raise Exception(str(last_err) if last_err else "OCR failed")
 
         if data.get("status") != "success":
             raise Exception(data.get("error") or "OCR service failed")

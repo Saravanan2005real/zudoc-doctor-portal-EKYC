@@ -1,6 +1,5 @@
 """
-Aadhaar Card OCR Service — PaddleOCR Microservice
-Port: 5001
+Aadhaar Card OCR + eKYC portal (in-process on port 8080)
 """
 
 import os
@@ -41,6 +40,7 @@ class TorchMockFinder:
         pass
 
 sys.meta_path.insert(0, TorchMockFinder())
+_TORCH_MOCK_FINDER = sys.meta_path[0]
 
 # Disable oneDNN/MKLDNN to prevent the PIR implementation bug on CPU
 os.environ['FLAGS_use_mkldnn'] = '0'
@@ -113,6 +113,26 @@ finally:
     fatal = any(k in captured.lower() for k in ("traceback", "error:", "exception"))
     if fatal and ("RetinaFace load failed" in captured or "DeepFace load failed" in captured):
         print(captured[-2000:], file=sys.stderr)
+
+
+def _release_torch_mock():
+    """Drop the Paddle-only torch mock so EyeTracker can import real PyTorch."""
+    try:
+        sys.meta_path.remove(_TORCH_MOCK_FINDER)
+    except ValueError:
+        pass
+    for finder in list(sys.meta_path):
+        if finder.__class__.__name__ == "TorchMockFinder":
+            try:
+                sys.meta_path.remove(finder)
+            except ValueError:
+                pass
+    for key in list(sys.modules):
+        if key == "torch" or key.startswith("torch."):
+            sys.modules.pop(key, None)
+
+
+_release_torch_mock()
 
 # Suppress paddlex logger
 import logging
@@ -1299,24 +1319,32 @@ def _face_detection_candidates(primary_bgr, original_bgr=None):
     return candidates
 
 
-def _square_face_crop_coords(x1, y1, x2, y2, iw, ih):
+def _square_face_crop_coords(x1, y1, x2, y2, iw, ih, mode="doc"):
     """
-    Expand RetinaFace box (20% L/R, 40% top, 30% bottom), then a square
-    centered on the face with side = max(orig_w, orig_h) * 1.5.
+    mode=doc: generous crop for uploaded ID scans.
+    mode=tight: live webcam — stay on the face so a held ID card is not included.
     """
     bw = max(1, int(x2 - x1))
     bh = max(1, int(y2 - y1))
-    left_pad = int(bw * 0.20)
-    right_pad = int(bw * 0.20)
-    top_pad = int(bh * 0.40)
-    bottom_pad = int(bh * 0.30)
+    if mode == "tight":
+        left_pad = int(bw * 0.10)
+        right_pad = int(bw * 0.10)
+        top_pad = int(bh * 0.16)
+        bottom_pad = int(bh * 0.12)
+        size_mult = 1.12
+    else:
+        left_pad = int(bw * 0.20)
+        right_pad = int(bw * 0.20)
+        top_pad = int(bh * 0.40)
+        bottom_pad = int(bh * 0.30)
+        size_mult = 1.5
     ex1 = int(x1) - left_pad
     ey1 = int(y1) - top_pad
     ex2 = int(x2) + right_pad
     ey2 = int(y2) + bottom_pad
     ew = max(1, ex2 - ex1)
     eh = max(1, ey2 - ey1)
-    size = int(max(max(bw, bh) * 1.5, ew, eh))
+    size = int(max(max(bw, bh) * size_mult, ew, eh))
     cx = (int(x1) + int(x2)) / 2.0
     cy = (int(y1) + int(y2)) / 2.0
     half = size / 2.0
@@ -1368,7 +1396,7 @@ def _opencv_face_fallback(img_bgr):
             return None
         x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
         ih, iw = img_bgr.shape[:2]
-        box = _square_face_crop_coords(x, y, x + w, y + h, iw, ih)
+        box = _square_face_crop_coords(x, y, x + w, y + h, iw, ih, mode="tight")
         if box is None:
             return None
         x1, y1, x2, y2 = box
@@ -1401,9 +1429,9 @@ def _to_3point(landmarks):
         return None
 
 
-def _align_and_crop_from_detection(img_bgr, det):
+def _align_and_crop_from_detection(img_bgr, det, crop_mode="doc"):
     """
-    Original image → RetinaFace bbox → expand (20/20/40/30) → square crop
+    Original image → RetinaFace bbox → expand → square crop
     → eye alignment on that crop → final square → 112×112.
     Never resize before padding/crop.
     """
@@ -1417,7 +1445,7 @@ def _align_and_crop_from_detection(img_bgr, det):
     if x2 <= x1 or y2 <= y1:
         return None, None
 
-    box = _square_face_crop_coords(x1, y1, x2, y2, iw, ih)
+    box = _square_face_crop_coords(x1, y1, x2, y2, iw, ih, mode=crop_mode)
     if box is None:
         return None, None
     sx1, sy1, sx2, sy2 = box
@@ -1430,14 +1458,32 @@ def _align_and_crop_from_detection(img_bgr, det):
     aligned = False
     three = _to_3point(landmarks)
     if three is not None:
-        le_x = float(three[0][0] - sx1)
-        le_y = float(three[0][1] - sy1)
-        re_x = float(three[1][0] - sx1)
-        re_y = float(three[1][1] - sy1)
+        pts = three.copy()
+        pts[:, 0] -= float(sx1)
+        pts[:, 1] -= float(sy1)
+        # Ignore RetinaFace L/R labels — swapped eyes produced a ~180° rotation.
+        if pts[0][0] > pts[1][0]:
+            pts[[0, 1]] = pts[[1, 0]]
+        le_x, le_y = float(pts[0][0]), float(pts[0][1])
+        re_x, re_y = float(pts[1][0]), float(pts[1][1])
+        nose_x, nose_y = float(pts[2][0]), float(pts[2][1])
+        eyes_y = (le_y + re_y) / 2.0
+        # Image y grows downward; eyes must sit above the nose. Otherwise the
+        # crop (or the whole frame) is inverted.
+        if nose_y < eyes_y:
+            crop = cv2.rotate(crop, cv2.ROTATE_180)
+            ch, cw = crop.shape[:2]
+            pts[:, 0] = cw - 1 - pts[:, 0]
+            pts[:, 1] = ch - 1 - pts[:, 1]
+            if pts[0][0] > pts[1][0]:
+                pts[[0, 1]] = pts[[1, 0]]
+            le_x, le_y = float(pts[0][0]), float(pts[0][1])
+            re_x, re_y = float(pts[1][0]), float(pts[1][1])
+            aligned = True
         dx = re_x - le_x
         dy = re_y - le_y
-        if abs(dx) > 1e-3:
-            angle = float(np.degrees(np.arctan2(dy, dx)))
+        angle = float(np.degrees(np.arctan2(dy, dx))) if (abs(dx) > 1e-3 or abs(dy) > 1e-3) else 0.0
+        if 0.8 < abs(angle) <= 45.0:
             ch, cw = crop.shape[:2]
             M = cv2.getRotationMatrix2D((cw / 2.0, ch / 2.0), angle, 1.0)
             crop = cv2.warpAffine(
@@ -1459,7 +1505,7 @@ def _align_and_crop_from_detection(img_bgr, det):
     return cv2.resize(final, (112, 112), interpolation=cv2.INTER_AREA), aligned
 
 
-def _detect_faces_on_image(img_bgr, source_label="frame"):
+def _detect_faces_on_image(img_bgr, source_label="frame", crop_mode="doc"):
     """
     Run RetinaFace (then OpenCV fallback) and return every face found.
     Each item: {"face": 112x112 BGR, "area": int, "meta": dict}
@@ -1484,7 +1530,9 @@ def _detect_faces_on_image(img_bgr, source_label="frame"):
                     area = max(0, x2 - x1) * max(0, y2 - y1)
                     if area <= 0:
                         continue
-                    face112, aligned = _align_and_crop_from_detection(img_bgr, det)
+                    face112, aligned = _align_and_crop_from_detection(
+                        img_bgr, det, crop_mode=crop_mode
+                    )
                     if face112 is None:
                         continue
                     found.append({
@@ -1534,15 +1582,154 @@ def _mask_out_bbox(img_bgr, bbox, pad_ratio=0.15):
     return out
 
 
+def _bbox_iou(a, b):
+    if not a or not b or len(a) != 4 or len(b) != 4:
+        return 0.0
+    ax1, ay1, ax2, ay2 = [int(v) for v in a]
+    bx1, by1, bx2, by2 = [int(v) for v in b]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    ua = max(1, (ax2 - ax1) * (ay2 - ay1)) + max(1, (bx2 - bx1) * (by2 - by1)) - inter
+    return inter / float(ua)
+
+
+def _nms_faces(faces, iou_thresh=0.40):
+    kept = []
+    for f in sorted(faces, key=lambda x: x.get("area") or 0, reverse=True):
+        bb = (f.get("meta") or {}).get("bbox")
+        if any(_bbox_iou(bb, (k.get("meta") or {}).get("bbox")) >= iou_thresh for k in kept):
+            continue
+        kept.append(f)
+    return kept
+
+
+def _scale_face_hit(hit, scale, ox=0, oy=0):
+    """Map a detection from a scaled/cropped ROI back to full-frame coords."""
+    meta = dict(hit.get("meta") or {})
+    bb = meta.get("bbox")
+    if bb and len(bb) == 4:
+        meta["bbox"] = [
+            int(bb[0] / scale) + ox,
+            int(bb[1] / scale) + oy,
+            int(bb[2] / scale) + ox,
+            int(bb[3] / scale) + oy,
+        ]
+        x1, y1, x2, y2 = meta["bbox"]
+        hit = dict(hit)
+        hit["meta"] = meta
+        hit["area"] = max(0, x2 - x1) * max(0, y2 - y1)
+    return hit
+
+
+def _opencv_all_faces(img_bgr, min_size=16):
+    found = []
+    try:
+        if not hasattr(cv2, "CascadeClassifier"):
+            return found
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+        face_cascade = cv2.CascadeClassifier(cascade_path)
+        if face_cascade.empty():
+            return found
+        faces = face_cascade.detectMultiScale(
+            gray, scaleFactor=1.08, minNeighbors=3, minSize=(min_size, min_size)
+        )
+        if faces is None or len(faces) == 0:
+            return found
+        ih, iw = img_bgr.shape[:2]
+        for x, y, w, h in faces:
+            det = {"facial_area": [int(x), int(y), int(x + w), int(y + h)], "landmarks": None}
+            face112, aligned = _align_and_crop_from_detection(img_bgr, det, crop_mode="tight")
+            if face112 is None:
+                continue
+            found.append({
+                "face": face112,
+                "area": int(w) * int(h),
+                "meta": {
+                    "source": "opencv_haar",
+                    "confidence": None,
+                    "bbox": [int(x), int(y), int(x + w), int(y + h)],
+                    "landmarks": None,
+                    "aligned": bool(aligned),
+                },
+            })
+    except Exception:
+        return found
+    return found
+
+
+def _rois_excluding_holder(iw, ih, bbox, pad_ratio=0.30):
+    """Left/right/top/bottom strips around the live face — where a held card sits."""
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    bw, bh = max(1, x2 - x1), max(1, y2 - y1)
+    hx1 = max(0, x1 - int(bw * pad_ratio))
+    hy1 = max(0, y1 - int(bh * pad_ratio))
+    hx2 = min(iw, x2 + int(bw * pad_ratio))
+    hy2 = min(ih, y2 + int(bh * pad_ratio))
+    rois = []
+    min_span = 28
+    if hx1 >= min_span:
+        rois.append((0, 0, hx1, ih, "left"))
+    if iw - hx2 >= min_span:
+        rois.append((hx2, 0, iw - hx2, ih, "right"))
+    if hy1 >= min_span:
+        rois.append((0, 0, iw, hy1, "top"))
+    if ih - hy2 >= min_span:
+        rois.append((0, hy2, iw, ih - hy2, "bottom"))
+    return rois
+
+
+def _face_crop_is_usable(img_bgr):
+    """Reject flat/blurry patches that are not a real face photo."""
+    if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
+        return False
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY) if len(img_bgr.shape) == 3 else img_bgr
+    if gray.shape[0] < 40 or gray.shape[1] < 40:
+        return False
+    std = float(gray.std())
+    sharp = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    # Beige wall / motion smear / Haar false-positive: almost no structure.
+    return std >= 22.0 and sharp >= 18.0
+
+
+def _is_retinaface_hit(hit):
+    src = str((hit.get("meta") or {}).get("source") or "")
+    return "retinaface" in src.lower()
+
+
+def _pick_id_face(candidates, holder_bbox, holder_area):
+    min_area = max(24 * 24, int(holder_area * 0.008))
+    max_area = int(holder_area * 0.65)
+    scored = []
+    hcx = (holder_bbox[0] + holder_bbox[2]) / 2.0
+    hcy = (holder_bbox[1] + holder_bbox[3]) / 2.0
+    for f in candidates:
+        if not _is_retinaface_hit(f):
+            continue
+        if not _face_crop_is_usable(f.get("face")):
+            continue
+        area = f.get("area") or 0
+        bb = (f.get("meta") or {}).get("bbox") or [0, 0, 0, 0]
+        if area < min_area or area > max_area:
+            continue
+        if _bbox_iou(bb, holder_bbox) >= 0.25:
+            continue
+        cx = (bb[0] + bb[2]) / 2.0
+        cy = (bb[1] + bb[3]) / 2.0
+        dist = ((cx - hcx) ** 2 + (cy - hcy) ** 2) ** 0.5
+        scored.append((dist, area, f))
+    if not scored:
+        return None
+    return max(scored, key=lambda t: (t[0], t[1]))[2]
+
+
 def extract_holder_and_id_card_faces(full_bgr, doc_bgr=None, warped_ok=False):
     """
     Step 4.1: person holding an ID card in front of the camera.
 
-    RetinaFace often sees TWO faces:
-      - largest  → live holder
-      - smaller  → photo printed on the held ID card
-
-    Never treat the live holder crop as the ID-card face.
+      - largest face  → live holder (tight crop, no card in the thumbnail)
+      - smaller face  → photo printed on the held ID card
     """
     empty_meta = {
         "source": "none",
@@ -1551,116 +1738,102 @@ def extract_holder_and_id_card_faces(full_bgr, doc_bgr=None, warped_ok=False):
         "landmarks": None,
         "aligned": False,
     }
-
-    # Pass 1: all faces on the full webcam frame
-    frame_faces = []
-    for source, candidate in _face_detection_candidates(full_bgr, None):
-        hits = _detect_faces_on_image(candidate, source_label=source)
-        if hits:
-            frame_faces = hits
-            break
-
     holder_face = None
     holder_meta = dict(empty_meta)
     id_face = None
     id_meta = dict(empty_meta)
 
+    if full_bgr is None or getattr(full_bgr, "size", 0) == 0:
+        return id_face, id_meta, holder_face, holder_meta
+
+    ih, iw = full_bgr.shape[:2]
+    collected = []
+    collected.extend(_detect_faces_on_image(full_bgr, "frame", crop_mode="tight"))
+    try:
+        collected.extend(
+            _detect_faces_on_image(_apply_clahe(full_bgr, clip_limit=2.0), "frame_clahe", crop_mode="tight")
+        )
+    except Exception:
+        pass
+
+    if max(ih, iw) <= 1400:
+        up = cv2.resize(full_bgr, (iw * 2, ih * 2), interpolation=cv2.INTER_CUBIC)
+        for hit in _detect_faces_on_image(up, "frame_x2", crop_mode="tight"):
+            collected.append(_scale_face_hit(hit, 2.0))
+
+    frame_faces = _nms_faces(collected)
+    print(f"[Step4.1] detections={len(collected)} unique={len(frame_faces)}")
+
     if frame_faces:
         holder_face = frame_faces[0]["face"]
         holder_meta = {**frame_faces[0]["meta"], "role": "holder"}
-
-        # Prefer a clearly smaller face (printed ID photo) over near-duplicates.
-        # Printed card faces are typically << live face; require a real min size.
         holder_area = max(1, frame_faces[0]["area"])
-        min_id_area = max(40 * 40, int(holder_area * 0.01))
-        smaller = [
-            f for f in frame_faces[1:]
-            if f["area"] < holder_area * 0.55 and f["area"] >= min_id_area
-        ]
-        if smaller:
-            # Prefer the smaller face farthest from the holder's center
-            # (printed ID photo is usually away from the live face).
-            hb = holder_meta.get("bbox") or [0, 0, 0, 0]
-            hcx = (hb[0] + hb[2]) / 2.0
-            hcy = (hb[1] + hb[3]) / 2.0
-
-            def _id_score(f):
-                bb = (f.get("meta") or {}).get("bbox") or [0, 0, 0, 0]
-                cx = (bb[0] + bb[2]) / 2.0
-                cy = (bb[1] + bb[3]) / 2.0
-                dist = ((cx - hcx) ** 2 + (cy - hcy) ** 2) ** 0.5
-                return (dist, f["area"])
-
-            pick = max(smaller, key=_id_score)
+        holder_bbox = holder_meta.get("bbox") or [0, 0, 0, 0]
+        pick = _pick_id_face(frame_faces[1:], holder_bbox, holder_area)
+        if pick is not None:
             id_face = pick["face"]
             id_meta = {**pick["meta"], "role": "id_card"}
-        elif len(frame_faces) >= 2:
-            pick = frame_faces[-1]  # smallest remaining
-            if min_id_area <= pick["area"] < holder_area * 0.85:
-                id_face = pick["face"]
-                id_meta = {**pick["meta"], "role": "id_card"}
 
-    # Pass 2: if only the holder was found, mask them out and search again
+    # Dedicated search: hide the live face and scan the rest of the frame
+    # (left/right strips where the user holds the card).
     if id_face is None and holder_meta.get("bbox"):
-        masked = _mask_out_bbox(full_bgr, holder_meta["bbox"], pad_ratio=0.2)
-        # Upscale so the tiny printed face is large enough for RetinaFace
-        h, w = masked.shape[:2]
-        up = cv2.resize(masked, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-        min_id_area = 40 * 40
-        for source, candidate in (("masked_x2", up), ("masked", masked)):
-            hits = _detect_faces_on_image(candidate, source_label=source)
-            if not hits:
+        holder_bbox = holder_meta["bbox"]
+        holder_area = max(1, (holder_bbox[2] - holder_bbox[0]) * (holder_bbox[3] - holder_bbox[1]))
+        extras = []
+        masked = _mask_out_bbox(full_bgr, holder_bbox, pad_ratio=0.45)
+        extras.extend(_detect_faces_on_image(masked, "masked", crop_mode="tight"))
+        mh, mw = masked.shape[:2]
+        up = cv2.resize(masked, (mw * 2, mh * 2), interpolation=cv2.INTER_CUBIC)
+        extras.extend([_scale_face_hit(h, 2.0) for h in _detect_faces_on_image(up, "masked_x2", crop_mode="tight")])
+        for ox, oy, rw, rh, tag in _rois_excluding_holder(iw, ih, holder_bbox):
+            roi = full_bgr[oy:oy + rh, ox:ox + rw]
+            if roi.size == 0 or min(roi.shape[:2]) < 24:
                 continue
-            pick = hits[0]
-            # Reject tiny Haar false-positives on the masked frame
-            area = pick["area"]
-            if source == "masked_x2":
-                area = area // 4  # bbox was measured on 2x image
-            if area < min_id_area:
-                continue
-            meta = dict(pick["meta"])
-            if source == "masked_x2" and meta.get("bbox"):
-                meta["bbox"] = [int(v / 2) for v in meta["bbox"]]
+            for scale, slabel in ((1.0, tag), (2.0, f"{tag}_x2"), (3.0, f"{tag}_x3")):
+                view = roi if scale == 1.0 else cv2.resize(
+                    roi, (int(rw * scale), int(rh * scale)), interpolation=cv2.INTER_CUBIC
+                )
+                for hit in _detect_faces_on_image(view, slabel, crop_mode="tight"):
+                    extras.append(_scale_face_hit(hit, scale, ox, oy))
+        pick = _pick_id_face(_nms_faces(extras), holder_bbox, holder_area)
+        if pick is not None:
             id_face = pick["face"]
-            id_meta = {**meta, "role": "id_card"}
-            break
+            id_meta = {**pick["meta"], "role": "id_card"}
+            print(f"[Step4.1] ID-card face from {id_meta.get('source')} area={pick['area']}")
 
-    # Pass 3: search inside a successfully warped ID-card crop only
+    # Warped document crop (if perspective found the card)
     if id_face is None and warped_ok and doc_bgr is not None:
-        # Upscale small card crops so RetinaFace can see the printed photo
         dh, dw = doc_bgr.shape[:2]
-        doc_variants = [("doc", doc_bgr)]
-        if min(dh, dw) < 600:
-            doc_variants.insert(0, (
-                "doc_x2",
-                cv2.resize(doc_bgr, (dw * 2, dh * 2), interpolation=cv2.INTER_CUBIC),
-            ))
+        doc_variants = [("doc", doc_bgr, 1.0)]
+        if min(dh, dw) < 700:
+            doc_variants.insert(0, ("doc_x2", cv2.resize(doc_bgr, (dw * 2, dh * 2), interpolation=cv2.INTER_CUBIC), 2.0))
+            doc_variants.insert(0, ("doc_x3", cv2.resize(doc_bgr, (dw * 3, dh * 3), interpolation=cv2.INTER_CUBIC), 3.0))
         try:
-            doc_variants.append(("doc_clahe", _apply_clahe(doc_bgr, clip_limit=2.0)))
+            doc_variants.append(("doc_clahe", _apply_clahe(doc_bgr, clip_limit=2.0), 1.0))
         except Exception:
             pass
-
-        for source, candidate in doc_variants:
-            hits = _detect_faces_on_image(candidate, source_label=source)
-            if not hits:
-                continue
-            # On a warped card, take the largest face in that crop (the ID photo).
-            # If the crop somehow still includes the holder, skip faces that are
-            # huge relative to the card (holder bleeding into a bad warp).
+        card_hits = []
+        for source, candidate, scale in doc_variants:
+            hits = _detect_faces_on_image(candidate, source, crop_mode="tight")
             card_area = candidate.shape[0] * candidate.shape[1]
             for pick in hits:
-                if pick["area"] > card_area * 0.45:
-                    continue  # too big to be a printed photo on the card
-                id_face = pick["face"]
-                id_meta = {**pick["meta"], "role": "id_card"}
-                break
-            if id_face is not None:
-                break
-            # Fallback: accept best face on a clean warp
-            id_face = hits[0]["face"]
-            id_meta = {**hits[0]["meta"], "role": "id_card"}
-            break
+                if pick["area"] > card_area * 0.50:
+                    continue
+                if pick["area"] < 12 * 12:
+                    continue
+                card_hits.append(pick)
+        if card_hits:
+            card_hits.sort(key=lambda f: f["area"], reverse=True)
+            pick = card_hits[0]
+            id_face = pick["face"]
+            id_meta = {**pick["meta"], "role": "id_card"}
+            print(f"[Step4.1] ID-card face from warped doc {id_meta.get('source')}")
 
+    print(
+        f"[Step4.1] holder={'yes' if holder_face is not None else 'no'} "
+        f"id_card={'yes' if id_face is not None else 'no'} "
+        f"id_src={id_meta.get('source')}"
+    )
     return id_face, id_meta, holder_face, holder_meta
 
 
@@ -2328,6 +2501,15 @@ def load_cv_image(file_path: str):
             return None
 
     try:
+        from PIL import ImageOps
+        with Image.open(path) as pil:
+            pil = ImageOps.exif_transpose(pil)
+            rgb = pil.convert("RGB")
+            return cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2BGR)
+    except Exception:
+        pass
+
+    try:
         data = np.fromfile(path, dtype=np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_COLOR)
         if img is not None:
@@ -2336,15 +2518,7 @@ def load_cv_image(file_path: str):
         pass
 
     img = cv2.imread(path)
-    if img is not None:
-        return img
-
-    try:
-        with Image.open(path) as pil:
-            rgb = pil.convert("RGB")
-            return cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2BGR)
-    except Exception:
-        return None
+    return img if img is not None else None
 
 
 @app.route('/health')
@@ -2360,24 +2534,74 @@ def index():
 def live_verification():
     return render_template_string(STEP2_HTML_TEMPLATE)
 
+_RECENT_OCR_FACES = []
+
+
+def _remember_ocr_face(filename):
+    if not filename:
+        return
+    name = os.path.basename(str(filename))
+    if name in _RECENT_OCR_FACES:
+        _RECENT_OCR_FACES.remove(name)
+    _RECENT_OCR_FACES.append(name)
+    del _RECENT_OCR_FACES[:-8]
+
+
 def _resolve_upload_face_path(filename):
     """Resolve a face filename inside the OCR upload folder."""
     if not filename:
         return None
     name = os.path.basename(str(filename).strip())
+    try:
+        from urllib.parse import unquote
+        name = unquote(name)
+    except Exception:
+        pass
     if not name or name in (".", ".."):
         return None
     path = os.path.join(app.config["UPLOAD_FOLDER"], name)
     return path if os.path.isfile(path) else None
 
 
+def _recent_uploaded_face_files():
+    """Faces saved from document OCR in this process (not live Step 4.1 crops)."""
+    names = []
+    seen = set()
+    for name in list(_RECENT_OCR_FACES)[::-1]:
+        path = _resolve_upload_face_path(name)
+        if path and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
 def _verify_face_pair(path_a, path_b):
     """
-    Cross-verify two already-cropped face images (112x112).
-    Prefer ArcFace; fall back to DeepFace default if ArcFace is unavailable.
+    Cross-verify two already-cropped face images with ArcFace.
+    Pixel similarity is NOT used for MATCHED — it rubber-stamps skin patches.
     """
-    if DeepFace is None or not path_a or not path_b:
+    if not path_a or not path_b:
         return None
+    img_a = cv2.imread(path_a)
+    img_b = cv2.imread(path_b)
+    if not _face_crop_is_usable(img_a) or not _face_crop_is_usable(img_b):
+        print(f"[face_match] skipped (not a usable face crop): {os.path.basename(path_a)} vs {os.path.basename(path_b)}")
+        return {
+            "verified": False,
+            "distance": None,
+            "threshold": None,
+            "model": None,
+            "error": "crop_not_a_face",
+        }
+    if DeepFace is None:
+        print("[face_match] DeepFace/ArcFace not loaded — cannot verify")
+        return {
+            "verified": False,
+            "distance": None,
+            "threshold": None,
+            "model": None,
+            "error": "arcface_unavailable",
+        }
     try:
         result = DeepFace.verify(
             img1_path=path_a,
@@ -2385,29 +2609,28 @@ def _verify_face_pair(path_a, path_b):
             model_name="ArcFace",
             enforce_detection=False,
         )
+        verified = bool(result.get("verified", False))
+        dist = float(result["distance"]) if result.get("distance") is not None else None
+        thr = float(result["threshold"]) if result.get("threshold") is not None else None
+        print(
+            f"[face_match] ArcFace verified={verified} d={dist} thr={thr} "
+            f"{os.path.basename(path_a)} vs {os.path.basename(path_b)}"
+        )
         return {
-            "verified": bool(result.get("verified", False)),
-            "distance": float(result["distance"]) if result.get("distance") is not None else None,
-            "threshold": float(result["threshold"]) if result.get("threshold") is not None else None,
+            "verified": verified,
+            "distance": dist,
+            "threshold": thr,
             "model": "ArcFace",
         }
     except Exception as e1:
-        print(f"ArcFace verify failed ({e1}); trying default DeepFace model")
-        try:
-            result = DeepFace.verify(
-                img1_path=path_a,
-                img2_path=path_b,
-                enforce_detection=False,
-            )
-            return {
-                "verified": bool(result.get("verified", False)),
-                "distance": float(result["distance"]) if result.get("distance") is not None else None,
-                "threshold": float(result["threshold"]) if result.get("threshold") is not None else None,
-                "model": "default",
-            }
-        except Exception as e2:
-            print(f"DeepFace verification failed: {e2}")
-            return {"verified": False, "error": str(e2), "model": None}
+        print(f"ArcFace verify failed ({e1})")
+        return {
+            "verified": False,
+            "distance": None,
+            "threshold": None,
+            "model": None,
+            "error": str(e1),
+        }
 
 
 def _collect_reference_faces(data):
@@ -2436,6 +2659,12 @@ def _collect_reference_faces(data):
     if isinstance(step3, list):
         for item in step3:
             _add("step3", item)
+
+    if not refs:
+        for name in _recent_uploaded_face_files():
+            _add("ocr_cache", name)
+        if refs:
+            print(f"[live_verify] No client face names; using {len(refs)} OCR face(s) from cache/disk")
 
     return refs
 
@@ -2528,6 +2757,10 @@ def live_verify_api():
             extract_holder_and_id_card_faces(img, doc_img, warped_ok)
         )
 
+        if id_face_img is not None and not _face_crop_is_usable(id_face_img):
+            print(f"[Step4.1] dropping unusable ID-card crop src={id_face_meta.get('source')}")
+            id_face_img = None
+            id_face_meta = {**id_face_meta, "source": "rejected_not_a_face"}
         id_face_filename = None
         if id_face_img is not None:
             candidate = f"live_id_face_{filename_id}.jpg"
@@ -2621,6 +2854,7 @@ def run_ocr():
             face_path = os.path.join(app.config['UPLOAD_FOLDER'], candidate)
             if _save_jpg(face_path, face_img):
                 face_filename = candidate
+                _remember_ocr_face(face_filename)
 
         # Step 4: OCR-safe enhance + dual-pass PaddleOCR (mild vs raw)
         processed_img, extracted_lines, confidence_scores, avg_confidence, parsed_fields, ocr_pass = best_ocr_pass(
@@ -2658,5 +2892,9 @@ def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 if __name__ == '__main__':
-    # threaded=True so portal evaluate-ekyc calls don't block each other / health checks
-    app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+    # Standalone Flask on 5001 is optional. The product entrypoint is:
+    #   python main.py   → everything on http://127.0.0.1:8080
+    print("OCR is in-process on the portal. Start the app with: python main.py")
+    print("(Optional standalone) OCR_STANDALONE=1 python -m ocr.engine")
+    if os.getenv("OCR_STANDALONE", "").strip() in ("1", "true", "yes"):
+        app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)

@@ -8,10 +8,15 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
-import torch
+
+try:
+    import torch
+    _HAS_TORCH = bool(getattr(torch, "__file__", None)) and callable(getattr(torch, "device", None))
+except Exception:
+    torch = None
+    _HAS_TORCH = False
 
 from .face_eyes import FaceEyeEngine
-from .fgi_net import FGI_Net
 from .preprocess import expand_box, face_to_tensor
 
 
@@ -51,21 +56,34 @@ class EyeTracker:
         facing_thresh: float = 0.55,
         use_fgi_refine: bool = True,
     ):
-        self.device = torch.device(
-            device or ("cuda" if torch.cuda.is_available() else "cpu")
-        )
         self.center_thresh = center_thresh
-        self.use_fgi_refine = use_fgi_refine
+        self.use_fgi_refine = bool(use_fgi_refine and _HAS_TORCH)
         self.weights_loaded = False
         self._is_init_checkpoint = True
+        self.model = None
+        self.device = None
 
         self.eyes = FaceEyeEngine(
             facing_thresh=facing_thresh,
             center_thresh=center_thresh,
         )
 
-        self.model = FGI_Net(num_classes=2).to(self.device)
-        self.model.eval()
+        if not _HAS_TORCH:
+            print("[EyeTracker] PyTorch unavailable — using MediaPipe pupil tracking only.")
+            return
+
+        try:
+            from .fgi_net import FGI_Net
+            self.device = torch.device(
+                device or ("cuda" if torch.cuda.is_available() else "cpu")
+            )
+            self.model = FGI_Net(num_classes=2).to(self.device)
+            self.model.eval()
+        except Exception as exc:
+            print(f"[EyeTracker] FGI-Net unavailable ({exc}) — MediaPipe pupil tracking only.")
+            self.model = None
+            self.device = None
+            return
 
         default_w = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -114,7 +132,6 @@ class EyeTracker:
             calib_progress=self.eyes.calibrator.progress,
         )
 
-    @torch.inference_mode()
     def estimate(self, frame_bgr: np.ndarray) -> GazeResult:
         h, w = frame_bgr.shape[:2]
         track = self.eyes.process(frame_bgr)
@@ -128,26 +145,28 @@ class EyeTracker:
 
         # Optional FGI refine only when both eyes face camera + real weights
         pitch = yaw = 0.0
-        x1, y1, x2, y2 = track.face_box
-        fw, fh = x2 - x1, y2 - y1
-        ex1, ey1, ex2, ey2 = expand_box(x1, y1, fw, fh, w, h, scale=1.25)
-        crop = frame_bgr[ey1:ey2, ex1:ex2]
-        if crop.size > 0 and both:
-            tensor = face_to_tensor(crop)
-            batch = torch.from_numpy(tensor).unsqueeze(0).to(self.device)
-            out = self.model(batch)
-            pitch = float(out[0, 0].item())
-            yaw = float(out[0, 1].item())
-            if (
-                self.use_fgi_refine
-                and self.weights_loaded
-                and not self._is_init_checkpoint
-                and direction == "center"
-            ):
-                if abs(yaw) >= abs(pitch) and abs(yaw) > 0.12:
-                    direction = "left" if yaw < 0 else "right"
-                elif abs(pitch) > 0.12:
-                    direction = "top" if pitch < 0 else "bottom"
+        if _HAS_TORCH and self.model is not None and both:
+            x1, y1, x2, y2 = track.face_box
+            fw, fh = x2 - x1, y2 - y1
+            ex1, ey1, ex2, ey2 = expand_box(x1, y1, fw, fh, w, h, scale=1.25)
+            crop = frame_bgr[ey1:ey2, ex1:ex2]
+            if crop.size > 0:
+                with torch.inference_mode():
+                    tensor = face_to_tensor(crop)
+                    batch = torch.from_numpy(tensor).unsqueeze(0).to(self.device)
+                    out = self.model(batch)
+                    pitch = float(out[0, 0].item())
+                    yaw = float(out[0, 1].item())
+                if (
+                    self.use_fgi_refine
+                    and self.weights_loaded
+                    and not self._is_init_checkpoint
+                    and direction == "center"
+                ):
+                    if abs(yaw) >= abs(pitch) and abs(yaw) > 0.12:
+                        direction = "left" if yaw < 0 else "right"
+                    elif abs(pitch) > 0.12:
+                        direction = "top" if pitch < 0 else "bottom"
 
         # Only expose plottable xy when both eyes face the camera
         return GazeResult(

@@ -1,6 +1,11 @@
 import os
 import uvicorn
 import logging
+
+# OCR (Paddle) loads first with a temporary torch mock, then releases it so
+# EyeTracker can import real PyTorch — all in this one process on port 8080.
+import ocr.engine  # noqa: F401
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -42,6 +47,7 @@ from controllers.analytics_controller import router as analytics_router
 from controllers.dlq_controller import router as dlq_router
 from controllers.prescription_controller import router as prescription_router
 from controllers.liveness_controller import router as liveness_router
+from controllers.ocr_controller import router as ocr_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -109,6 +115,7 @@ app.include_router(analytics_router)
 app.include_router(dlq_router)
 app.include_router(prescription_router)
 app.include_router(liveness_router)
+app.include_router(ocr_router)
 
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -133,49 +140,12 @@ os.makedirs("public", exist_ok=True)
 app.mount("/", StaticFiles(directory="public", html=True), name="public")
 
 
-def _ocr_already_running() -> bool:
-    try:
-        import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:5001/health", timeout=2) as resp:
-            return resp.status < 500
-    except Exception:
-        try:
-            import urllib.request
-            with urllib.request.urlopen("http://127.0.0.1:5001/", timeout=2) as resp:
-                return resp.status < 500
-        except Exception:
-            return False
-
-
-def _ensure_ocr_process():
-    """OCR must stay in a separate process (it mocks torch for Paddle)."""
-    if _ocr_already_running():
-        logger.info("[OCR] Microservice already running on http://127.0.0.1:5001")
-        return
-    import subprocess
-    import sys
-    backend_dir = os.path.dirname(os.path.abspath(__file__))
-    logger.info("[OCR] Starting OCR microservice on port 5001...")
-    log_path = os.path.join(backend_dir, "ocr_service.log")
-    log_file = open(log_path, "a", encoding="utf-8")
-    creationflags = 0
-    if os.name == "nt":
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen(
-        [sys.executable, "-m", "ocr.engine"],
-        cwd=backend_dir,
-        stdout=log_file,
-        stderr=log_file,
-        creationflags=creationflags,
-    )
-
-
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
-    _ensure_ocr_process()
 
     logger.info("=======================================================")
     logger.info("Starting Enterprise Doctor Verification Service v1.0.0")
+    logger.info("OCR + liveness + portal run in this process (single port)")
     logger.info("=======================================================")
     
     try:

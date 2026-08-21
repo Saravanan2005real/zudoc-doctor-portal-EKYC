@@ -166,6 +166,6 @@ def get_ekyc_evaluation_service(db: Session):
         doctor_repo=DoctorRepository(db),
         doc_repo=DocumentRepository(db),
         history_repo=VerificationHistoryRepository(db),
-        ocr_service_url=os.getenv("OCR_SERVICE_URL", "http://127.0.0.1:5001/api/v1/ocr"),
+        ocr_service_url=None,
         uploads_dir=uploads_dir,
     )

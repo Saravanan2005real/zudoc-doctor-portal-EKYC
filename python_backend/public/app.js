@@ -637,8 +637,8 @@ function getStep3FaceFiles() {
     .filter(Boolean)
     .map((u) => {
       try {
-        const s = String(u);
-        return s.substring(s.lastIndexOf('/') + 1);
+        const s = String(u).split('?')[0];
+        return decodeURIComponent(s.substring(s.lastIndexOf('/') + 1));
       } catch (_) {
         return null;
       }
@@ -713,14 +713,15 @@ function renderModule1Faces(data) {
       <div style="font-size:0.92rem; background:#f3f4f6; border:1px solid #d1d5db; border-radius:10px; padding:0.75rem;">
         <div style="margin:0.25rem 0;"><strong>Uploaded vs Live holder:</strong> ${matchBadge(data.face_match_vs_holder ?? data.face_match)}</div>
         <div style="margin:0.25rem 0;"><strong>Uploaded vs ID card face:</strong> ${matchBadge(data.face_match_vs_id_card)}</div>
+        <div class="text-muted" style="margin-top:0.35rem;font-size:0.85rem;">Only ArcFace counts as a match. A missing/blurry ID-card crop is N/A, not MATCHED.</div>
         ${matchRows.length ? matchRows.map((m) => {
           const ref = m.reference || m.step3_face || 'uploaded face';
           const vh = m.vs_holder || null;
           const vi = m.vs_id_card || null;
           return `<div style="margin:0.4rem 0; padding-top:0.35rem; border-top:1px solid #e5e7eb;">
             <strong>${ref}</strong>
-            <div>→ holder: ${matchBadge(vh ? vh.verified : m.verified)} ${vh && vh.distance != null ? `(d=${Number(vh.distance).toFixed(3)})` : ''}</div>
-            <div>→ ID card: ${matchBadge(vi ? vi.verified : null)} ${vi && vi.distance != null ? `(d=${Number(vi.distance).toFixed(3)})` : ''}</div>
+            <div>→ holder: ${matchBadge(vh ? vh.verified : m.verified)} ${vh && vh.model ? `[${vh.model}]` : ''} ${vh && vh.distance != null ? `(d=${Number(vh.distance).toFixed(3)})` : ''}${vh && vh.error ? ` (${vh.error})` : ''}</div>
+            <div>→ ID card: ${matchBadge(vi && !vi.error ? vi.verified : null)} ${vi && vi.model ? `[${vi.model}]` : ''} ${vi && vi.distance != null ? `(d=${Number(vi.distance).toFixed(3)})` : ''}${vi && vi.error ? ` (${vi.error})` : ''}</div>
           </div>`;
         }).join('') : '<div class="text-muted" style="margin-top:0.35rem;">No uploaded face was available for comparison. Complete document OCR first.</div>'}
       </div>
@@ -907,10 +908,19 @@ async function pollEyeTrack(gen) {
       }),
     });
     eyeResetPending = false;
-    const data = await resp.json().catch(() => ({}));
+    let data = {};
+    try {
+      data = await resp.json();
+    } catch (_) {
+      data = {};
+    }
     if (gen !== s4Gen || !s4Active) return;
 
     if (data.plot_image && plotImg) plotImg.src = data.plot_image;
+    if (!resp.ok && statusEl) {
+      statusEl.innerText = `Status: Eye tracker error (${resp.status}) — ${data.detail || 'retrying'}`;
+      statusEl.className = 'alert alert-danger mt-2 text-center';
+    }
     const pct = Math.round((data.calib_progress || 0) * 100);
     if (bar) bar.style.width = `${pct}%`;
 
@@ -1020,7 +1030,7 @@ function beginStep4() {
   stopS4Camera();
   resetPipelineUI();
   state.liveDocResult = null;
-  state._facePreloadPromise = null;
+  if (!getStep3FaceFiles().length) state._facePreloadPromise = null;
   module1Running = false;
   resetGazeChallenge();
   const docSection = document.getElementById('doc-face-section');
@@ -1102,7 +1112,7 @@ function renderEkycResults(documents) {
   if (!panel || !cards) return;
 
   if (!documents || documents.length === 0) {
-    cards.innerHTML = `<div class="text-muted">No OCR fields returned. Confirm the OCR service is running on port 5001 and the Aadhaar/PAN images are readable.</div>`;
+    cards.innerHTML = `<div class="text-muted">No OCR fields returned. Confirm the app is running on port 8080 and the Aadhaar/PAN images are readable.</div>`;
     panel.classList.remove('hidden');
     return;
   }
@@ -1227,7 +1237,7 @@ async function startPipelineAnimation() {
   resetPipelineUI();
   activateStage(1, 'done', 'Verification package submitted');
   logPipe(`[STEP 1] Application loaded for doctor ${state.activeDoctor.public_id}`);
-  logPipe('[STEP 2] Calling eKYC OCR microservice at http://127.0.0.1:5001 ...');
+  logPipe('[STEP 2] Running eKYC OCR in-process on this server ...');
   logPipe('[INFO] First OCR run can take 30-90s while models warm up. Please wait...');
   activateStage(2, 'running', 'Running OCR model on uploaded KYC documents...');
 
@@ -1285,7 +1295,7 @@ async function startPipelineAnimation() {
     badge.innerText = 'FAILED';
     badge.className = 'badge badge-danger';
     logPipe(`[ERROR] ${err.message}`);
-    logPipe('[HINT] Make sure OCR service is running on http://127.0.0.1:5001');
+    logPipe('[HINT] Restart with: python main.py  (http://127.0.0.1:8080)');
   } finally {
     pipelineRunning = false;
   }

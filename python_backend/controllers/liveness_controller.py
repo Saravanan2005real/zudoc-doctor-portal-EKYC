@@ -4,7 +4,10 @@ from typing import Optional
 import asyncio
 import base64
 import logging
+import sys
 import threading
+import traceback
+import types
 import warnings
 import numpy as np
 import cv2
@@ -21,9 +24,6 @@ _center_offset_left = None
 _center_offset_right = None
 
 try:
-    import sys
-    import types
-
     # MediaPipe 0.10.14 pulls tensorflow via mediapipe.tasks; Face Mesh only needs solutions.
     sys.modules.setdefault("mediapipe.tasks", types.ModuleType("mediapipe.tasks"))
     sys.modules.setdefault("mediapipe.tasks.python", types.ModuleType("mediapipe.tasks.python"))
@@ -32,10 +32,18 @@ try:
     tracker = EyeTracker()
     graph = EyeXYGraph(width=360, height=360, history=80)
     _graph_locked = False
+    logger.info("EyeTracker loaded (graph + pupil tracking ready)")
+    print("[EyeTracker] pupil graph ready", flush=True)
 except Exception as e:
-    logger.error("Failed to load EyeTracker: %s", e)
+    logger.exception("Failed to load EyeTracker: %s", e)
+    print("Failed to load EyeTracker:", e, file=sys.stderr, flush=True)
+    traceback.print_exc()
     tracker = None
-    graph = None
+    try:
+        from eye_tracking.fgi_eye_tracker.plot import EyeXYGraph
+        graph = EyeXYGraph(width=360, height=360, history=80)
+    except Exception:
+        graph = None
     _graph_locked = False
 
 router = APIRouter(
@@ -63,6 +71,19 @@ def _jpeg_url(img, quality=80):
     if not ok:
         return None
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+def _plot_url(img=None, direction: str = "", target: str = ""):
+    canvas = img
+    if canvas is None and graph is not None:
+        canvas = graph.render(direction=direction, target=target)
+    if canvas is None:
+        canvas = np.full((360, 360, 3), 28, dtype=np.uint8)
+        cv2.putText(
+            canvas, "pupil graph", (70, 180),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2,
+        )
+    return _jpeg_url(canvas)
 
 
 def _run_demo_frame(img, reset: bool = False, target: str = ""):
@@ -124,8 +145,23 @@ def _run_demo_frame(img, reset: bool = False, target: str = ""):
 
 @router.post("/liveness")
 async def check_liveness(req: LivenessRequest):
-    if not tracker:
-        raise HTTPException(status_code=503, detail="Liveness service unavailable")
+    wanted = (req.target or "").strip().lower()
+    empty = {
+        "status": "success",
+        "both_eyes_facing": False,
+        "direction": "no_face",
+        "target": wanted or None,
+        "target_hit": False,
+        "face_detected": False,
+        "calib_ready": False,
+        "calib_progress": 0.0,
+        "left_xy": None,
+        "right_xy": None,
+        "plot_image": _plot_url(target=wanted),
+    }
+    if not tracker or graph is None:
+        logger.error("Liveness called but EyeTracker is not loaded")
+        return empty
 
     try:
         img = _decode_image(req.image)
@@ -133,22 +169,14 @@ async def check_liveness(req: LivenessRequest):
             raise HTTPException(status_code=400, detail="Invalid image data")
 
         if float(np.mean(img)) < 12:
-            return {
-                "status": "success",
-                "both_eyes_facing": False,
-                "direction": "no_face",
-                "face_detected": False,
-                "calib_ready": False,
-                "calib_progress": 0.0,
-                "plot_image": None,
-            }
+            empty["plot_image"] = _plot_url(target=wanted)
+            return empty
 
         result, plot_view, direction_for_plot = await asyncio.to_thread(
-            _run_demo_frame, img, req.reset, (req.target or "").strip().lower()
+            _run_demo_frame, img, req.reset, wanted
         )
 
         looked = (direction_for_plot or "").strip().lower()
-        wanted = (req.target or "").strip().lower()
         return {
             "status": "success",
             "both_eyes_facing": bool(result.both_eyes_facing),
@@ -160,13 +188,16 @@ async def check_liveness(req: LivenessRequest):
             "calib_progress": float(getattr(result, "calib_progress", 0.0) or 0.0),
             "left_xy": list(result.left_xy) if result.left_xy else None,
             "right_xy": list(result.right_xy) if result.right_xy else None,
-            "plot_image": _jpeg_url(plot_view),
+            "plot_image": _plot_url(plot_view, direction=looked, target=wanted),
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Liveness check failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        empty["direction"] = "error"
+        empty["plot_image"] = _plot_url(target=wanted)
+        logger.error("Returning empty pupil graph after error: %s", e)
+        return empty
 
 
 class LiveDocRequest(BaseModel):
@@ -177,34 +208,20 @@ class LiveDocRequest(BaseModel):
 
 @router.post("/live-doc")
 async def live_doc_ocr(req: LiveDocRequest):
-    """Proxy webcam frame to the existing OCR live_verify module (unflipped capture)."""
-    import os
-    import requests
+    """Run live ID-hold OCR + face extract in-process (no port 5001)."""
+    from ocr.inproc import post_live_verify
 
-    ocr_url = os.getenv("OCR_SERVICE_URL", "http://127.0.0.1:5001/api/v1/ocr")
-    live_url = ocr_url.replace("/api/v1/ocr", "/api/v1/live_verify")
-
-    def _call():
-        payload = {
-            "image": req.image,
-            "step1_face": (req.step1_face or "").strip() or None,
-            "step3_faces": req.step3_faces or [],
-        }
-        resp = requests.post(live_url, json=payload, timeout=180)
-        try:
-            body = resp.json()
-        except Exception:
-            body = {"error": resp.text[:300]}
-        return resp.status_code, body
-
+    payload = {
+        "image": req.image,
+        "step1_face": (req.step1_face or "").strip() or None,
+        "step3_faces": req.step3_faces or [],
+    }
     try:
-        code, data = await asyncio.to_thread(_call)
+        code, data = await asyncio.to_thread(post_live_verify, payload)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"OCR live_verify unreachable: {e}")
+        raise HTTPException(status_code=503, detail=f"OCR live_verify failed: {e}")
 
     if code >= 400:
         raise HTTPException(status_code=code, detail=data.get("error") or data.get("detail") or "live OCR failed")
 
-    # Image URLs are already relative paths (e.g. /ocr_uploads/...) and will be
-    # served by the portal's own /ocr_uploads static mount — no rewriting needed.
     return data
