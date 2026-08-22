@@ -549,6 +549,8 @@ let s4Timer = null;
 let s4Gen = 0;
 let s4Active = false;
 let s4InFlight = false;
+let s41Busy = false;
+let s41QualityTimer = null;
 let pipelineRunning = false;
 let module1Running = false;
 let eyeResetPending = true;
@@ -596,6 +598,8 @@ function resetGazeChallenge() {
 function stopS4Camera() {
   s4Active = false;
   s4InFlight = false;
+  s41Busy = false;
+  if (s41QualityTimer) { clearInterval(s41QualityTimer); s41QualityTimer = null; }
   if (s4Timer) { clearTimeout(s4Timer); s4Timer = null; }
   if (s4Stream) { s4Stream.getTracks().forEach(t => t.stop()); s4Stream = null; }
   ['eye-track-video', 'doc-face-video'].forEach((id) => {
@@ -658,7 +662,6 @@ function renderModule1Faces(data) {
   const idFaceUrl = data.id_card_face_image_url || null;
   const holderFaceUrl = data.holder_face_image_url || null;
   const fields = data.parsed_fields || {};
-  const rawText = Array.isArray(data.raw_text) ? data.raw_text.filter(Boolean) : [];
 
   const faceHtml = (idFaceUrl || holderFaceUrl)
     ? `<div style="display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
@@ -674,28 +677,28 @@ function renderModule1Faces(data) {
     : `<p class="text-muted mb-1">No face crop returned. Hold the card closer and capture again.</p>`;
 
   const fieldsHtml = (() => {
-    const entries = Object.entries(fields).slice(0, 10);
+    const keep = ['document_type', 'name', 'dob', 'gender', 'aadhaar_number', 'pan_number'];
+    const entries = keep
+      .filter((k) => fields[k] != null && String(fields[k]).trim() !== '')
+      .map((k) => [k, fields[k]]);
     if (!entries.length) return '';
+    const labels = {
+      document_type: 'Document',
+      name: 'Name',
+      dob: 'DOB',
+      gender: 'Gender',
+      aadhaar_number: 'Aadhaar',
+      pan_number: 'PAN',
+    };
     return `
       <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
-        <div style="font-weight:700; margin-bottom:0.25rem;">OCR Fields</div>
+        <div style="font-weight:700; margin-bottom:0.25rem;">ID details</div>
         ${entries
-          .map(([k, v]) => `<div style="display:flex; gap:0.5rem; margin:0.15rem 0;"><span style="color:#333; min-width:150px; font-weight:600;">${k}</span><span style="color:#000;">${v ?? '-'}</span></div>`)
+          .map(([k, v]) => `<div style="display:flex; gap:0.5rem; margin:0.15rem 0;"><span style="color:#333; min-width:120px; font-weight:600;">${labels[k] || k}</span><span style="color:#000;">${v ?? '-'}</span></div>`)
           .join('')}
       </div>
     `;
   })();
-
-  const rawHtml = rawText.length
-    ? `
-      <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
-        <div style="font-weight:700; margin-bottom:0.25rem;">Raw OCR Text</div>
-        <div style="color:#000; font-size:0.9rem; line-height:1.35; background:#f3f4f6; padding:0.75rem; border-radius:10px; white-space:pre-wrap; border:1px solid #d1d5db;">
-          ${rawText.join('\n')}
-        </div>
-      </div>
-    `
-    : '';
 
   const matchBadge = (val) => {
     if (val === true) return '<span style="color:#166534;font-weight:700;">MATCHED</span>';
@@ -703,27 +706,15 @@ function renderModule1Faces(data) {
     return '<span style="color:#6b7280;font-weight:600;">N/A</span>';
   };
 
-  const matchRows = Array.isArray(data.face_match_details) && data.face_match_details.length
-    ? data.face_match_details
-    : (Array.isArray(data.step3_face_matches) ? data.step3_face_matches : []);
-
+  const liveVsId = data.face_match_live_vs_id && !data.face_match_live_vs_id.error
+    ? data.face_match_live_vs_id.verified
+    : null;
   const compareHtml = `
     <div class="mt-3" style="text-align:left; max-width:620px; margin:0 auto; color:#111;">
-      <div style="font-weight:700; margin-bottom:0.25rem;">Face Cross-Verification (Uploaded vs Live)</div>
+      <div style="font-weight:700; margin-bottom:0.25rem;">Face match</div>
       <div style="font-size:0.92rem; background:#f3f4f6; border:1px solid #d1d5db; border-radius:10px; padding:0.75rem;">
-        <div style="margin:0.25rem 0;"><strong>Uploaded vs Live holder:</strong> ${matchBadge(data.face_match_vs_holder ?? data.face_match)}</div>
-        <div style="margin:0.25rem 0;"><strong>Uploaded vs ID card face:</strong> ${matchBadge(data.face_match_vs_id_card)}</div>
-        <div class="text-muted" style="margin-top:0.35rem;font-size:0.85rem;">Only ArcFace counts as a match. A missing/blurry ID-card crop is N/A, not MATCHED.</div>
-        ${matchRows.length ? matchRows.map((m) => {
-          const ref = m.reference || m.step3_face || 'uploaded face';
-          const vh = m.vs_holder || null;
-          const vi = m.vs_id_card || null;
-          return `<div style="margin:0.4rem 0; padding-top:0.35rem; border-top:1px solid #e5e7eb;">
-            <strong>${ref}</strong>
-            <div>→ holder: ${matchBadge(vh ? vh.verified : m.verified)} ${vh && vh.model ? `[${vh.model}]` : ''} ${vh && vh.distance != null ? `(d=${Number(vh.distance).toFixed(3)})` : ''}${vh && vh.error ? ` (${vh.error})` : ''}</div>
-            <div>→ ID card: ${matchBadge(vi && !vi.error ? vi.verified : null)} ${vi && vi.model ? `[${vi.model}]` : ''} ${vi && vi.distance != null ? `(d=${Number(vi.distance).toFixed(3)})` : ''}${vi && vi.error ? ` (${vi.error})` : ''}</div>
-          </div>`;
-        }).join('') : '<div class="text-muted" style="margin-top:0.35rem;">No uploaded face was available for comparison. Complete document OCR first.</div>'}
+        <div style="margin:0.25rem 0;"><strong>You vs printed ID photo:</strong> ${matchBadge(liveVsId)}</div>
+        <div style="margin:0.25rem 0;"><strong>Uploaded KYC photo vs you:</strong> ${matchBadge(data.face_match_vs_holder ?? data.face_match)}</div>
       </div>
     </div>
   `;
@@ -738,10 +729,78 @@ function renderModule1Faces(data) {
       ${errorHtml}
       ${compareHtml}
       ${fieldsHtml}
-      ${rawHtml}
     </div>
   `;
   resultDiv.classList.remove('hidden');
+}
+
+function clientFrameQuality(videoEl) {
+  const w = 160;
+  const h = 120;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(videoEl, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  let sum = 0;
+  let sum2 = 0;
+  const n = w * h;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    sum += y;
+    sum2 += y * y;
+  }
+  const brightness = sum / n;
+  const contrast = Math.sqrt(Math.max(0, sum2 / n - brightness * brightness));
+  const lighting_ok = brightness >= 50 && brightness <= 210;
+  const sharp_ok = contrast >= 18;
+  return { brightness, contrast, lighting_ok, sharp_ok, ok: lighting_ok && sharp_ok };
+}
+
+function step41Passed(data) {
+  if (!data) return false;
+  if (data.step41_complete === true) return true;
+  const holder = !!(data.holder_face_image_url);
+  const idFace = !!(data.id_card_face_image_url);
+  const fields = data.parsed_fields || {};
+  const ocrOk = !!(fields.aadhaar_number || fields.pan_number || fields.name);
+  return holder && idFace && ocrOk && data.status !== 'failed';
+}
+
+function step41FailMessage(data) {
+  const missing = Array.isArray(data.step41_missing) ? data.step41_missing : [];
+  const bits = [];
+  if (missing.includes('live_face')) bits.push('live face not found');
+  if (missing.includes('id_card_face')) bits.push('ID-card printed face not found — hold the card closer, photo toward camera');
+  if (missing.includes('ocr_fields')) bits.push('ID text not readable — reduce glare and show the full card');
+  if (!bits.length) bits.push('hold your face and ID card in view, then try again');
+  return `Status: Step 4.1 incomplete (${bits.join('; ')}). Eye tracking will not start until this passes.`;
+}
+
+function tickStep41Quality(gen) {
+  if (gen !== s4Gen || !s4Active || s41Busy) return;
+  const video = document.getElementById('doc-face-video');
+  const statusEl = document.getElementById('doc-face-status');
+  if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+  const q = clientFrameQuality(video);
+  if (statusEl && !s41Busy) {
+    if (!q.lighting_ok) {
+      statusEl.innerText = 'Hold your face and ID card in view. Lighting looks off — then click Capture now.';
+      statusEl.className = 'alert alert-warning mt-2 text-center';
+    } else if (!q.sharp_ok) {
+      statusEl.innerText = 'Hold still with the ID fully in frame, then click Capture now.';
+      statusEl.className = 'alert alert-warning mt-2 text-center';
+    } else {
+      statusEl.innerText = 'Ready. Click Capture now when your face and ID card are in view. Nothing is sent until you click.';
+      statusEl.className = 'alert alert-info mt-2 text-center';
+    }
+  }
+}
+
+function startStep41QualityLoop(gen) {
+  if (s41QualityTimer) clearInterval(s41QualityTimer);
+  s41QualityTimer = setInterval(() => tickStep41Quality(gen), 350);
 }
 
 // --- Module 1: live camera + existing OCR live_verify (CSS mirror, unflipped capture) ---
@@ -757,12 +816,17 @@ async function startModule1() {
     await openCamera(video);
     if (gen !== s4Gen) return;
     if (overlay) overlay.style.display = 'none';
-    if (captureBtn) captureBtn.classList.remove('hidden');
+    if (captureBtn) {
+      captureBtn.classList.remove('hidden');
+      captureBtn.disabled = false;
+      captureBtn.innerText = 'Capture now';
+    }
     s4Active = true;
     if (statusEl) {
-      statusEl.innerText = 'Status: Camera on (mirrored preview). Hold your Aadhaar/PAN in view, then Capture.';
+      statusEl.innerText = 'Camera on. Hold your face and ID card in view, then click Capture now. The app will not capture until you click.';
       statusEl.className = 'alert alert-info mt-2 text-center';
     }
+    startStep41QualityLoop(gen);
   } catch (err) {
     console.error('Module1 camera error:', err);
     if (statusEl) {
@@ -773,6 +837,7 @@ async function startModule1() {
 }
 
 async function captureLiveDoc() {
+  if (s41Busy) return;
   const video = document.getElementById('doc-face-video');
   const statusEl = document.getElementById('doc-face-status');
   const captureBtn = document.getElementById('btn-capture-doc-face');
@@ -783,24 +848,19 @@ async function captureLiveDoc() {
     }
     return;
   }
-  if (captureBtn) { captureBtn.disabled = true; captureBtn.innerText = 'Extracting...'; }
+  s41Busy = true;
+  if (captureBtn) { captureBtn.disabled = true; captureBtn.innerText = 'Extracting…'; }
   if (statusEl) {
-    statusEl.innerText = 'Status: Waiting for uploaded faces (if needed), then sending live frame to OCR...';
+    statusEl.innerText = 'Capturing this frame only. Extracting live face, ID-card face, and OCR…';
     statusEl.className = 'alert alert-info mt-2 text-center';
   }
   const w = video.videoWidth;
   const h = video.videoHeight;
   const dataUrl = grabFrame(video, w, h);
   try {
-    // Prefer matching against uploaded faces; wait up to 2 min if OCR still running.
     await ensureUploadedFacesReady(120000);
     const step3Faces = getStep3FaceFiles();
     const step1Face = getStep1FaceFile();
-    if (statusEl) {
-      statusEl.innerText = step3Faces.length
-        ? `Status: Matching against ${step3Faces.length} uploaded face(s). Running live RetinaFace...`
-        : 'Status: No uploaded face yet — extracting live faces only...';
-    }
     const resp = await fetch(`${API_BASE}/api/v1/verification/live-doc`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -815,35 +875,39 @@ async function captureLiveDoc() {
 
     state.liveDocResult = data;
     renderModule1Faces(data);
-    const faceOk = !!(data.holder_face_image_url || data.id_card_face_image_url || data.face_image_url);
+    const passed = step41Passed(data);
     if (statusEl) {
-      statusEl.innerText = faceOk
-        ? 'Status: Live faces extracted. Starting live eye tracking...'
-        : 'Status: OCR ran but no face was found. Hold the card closer and capture again.';
-      statusEl.className = `alert ${faceOk ? 'alert-success' : 'alert-warning'} mt-2 text-center`;
+      statusEl.innerText = passed
+        ? 'Phase 7 done: live face + ID-card face extracted. Starting Step 4.2 eye liveness…'
+        : step41FailMessage(data);
+      statusEl.className = `alert ${passed ? 'alert-success' : 'alert-warning'} mt-2 text-center`;
     }
-    if (faceOk) {
+    if (passed) {
+      if (s41QualityTimer) { clearInterval(s41QualityTimer); s41QualityTimer = null; }
       stopS4Camera();
       if (captureBtn) captureBtn.classList.add('hidden');
       setTimeout(() => startModule2(), 1200);
-    } else if (captureBtn) {
-      captureBtn.disabled = false;
-      captureBtn.innerText = 'Capture & Extract Face';
+    } else {
+      s41Busy = false;
+      if (captureBtn) {
+        captureBtn.disabled = false;
+        captureBtn.innerText = 'Capture now';
+      }
     }
   } catch (err) {
     console.error('Live doc OCR error:', err);
+    s41Busy = false;
     if (statusEl) {
-      statusEl.innerText = `Status: OCR error — ${err.message || err}`;
+      statusEl.innerText = `Status: Step 4.1 failed — ${err.message || err}. Stay here and capture again. Eye tracking will not start.`;
       statusEl.className = 'alert alert-danger mt-2 text-center';
     }
-    if (captureBtn) { captureBtn.disabled = false; captureBtn.innerText = 'Capture & Extract Face'; }
+    if (captureBtn) { captureBtn.disabled = false; captureBtn.innerText = 'Capture now'; }
 
-    // Show the failure on the page (so user always sees Step 4.1 output).
     const resultDiv = document.getElementById('doc-face-result');
     if (resultDiv) {
       resultDiv.classList.remove('hidden');
       resultDiv.innerHTML = `
-        <p class="text-danger" style="font-weight:600;">Step 4.1 failed to extract face/OCR.</p>
+        <p class="text-danger" style="font-weight:600;">Step 4.1 failed. Step 4.2 will not start.</p>
         <p class="text-muted">${err.message || err}</p>
       `;
     }
@@ -1046,7 +1110,7 @@ function beginStep4() {
   if (docResult) { docResult.classList.add('hidden'); docResult.innerHTML = ''; }
   if (overlay) overlay.style.display = 'flex';
   if (startBtn) { startBtn.disabled = false; startBtn.innerText = 'Allow Camera'; }
-  if (captureBtn) { captureBtn.classList.add('hidden'); captureBtn.disabled = false; captureBtn.innerText = 'Capture & Extract Face'; }
+  if (captureBtn) { captureBtn.classList.add('hidden'); captureBtn.disabled = false; captureBtn.innerText = 'Capture now'; }
   if (timeline) timeline.classList.add('hidden');
   if (docStatus) {
     docStatus.innerText = 'Status: Click Allow Camera. Uploaded faces extract in the background for matching.';
@@ -1167,8 +1231,8 @@ function renderEkycResults(documents) {
             </div>` : ''}
         </div>
         <div style="color:#111; font-size:0.92rem;">
-          <div><strong>Uploaded vs Live holder:</strong> ${badge(live.face_match_vs_holder ?? live.face_match)}</div>
-          <div style="margin-top:0.25rem;"><strong>Uploaded vs ID card face:</strong> ${badge(live.face_match_vs_id_card)}</div>
+          <div><strong>You vs printed ID photo:</strong> ${badge(live.face_match_live_vs_id && !live.face_match_live_vs_id.error ? live.face_match_live_vs_id.verified : null)}</div>
+          <div style="margin-top:0.25rem;"><strong>Uploaded KYC photo vs you:</strong> ${badge(live.face_match_vs_holder ?? live.face_match)}</div>
         </div>
       </div>
     `;

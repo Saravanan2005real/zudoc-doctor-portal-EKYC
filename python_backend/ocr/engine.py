@@ -98,12 +98,6 @@ try:
     except Exception as e:
         DeepFace = None
         _sup_err.write(f"DeepFace load failed: {e}\n")
-
-    try:
-        from ultralytics import YOLO
-        yolo_model = YOLO('yolov8n.pt')  # Placeholder for document detection model
-    except Exception:
-        yolo_model = None
 finally:
     sys.stdout, sys.stderr = _old_stdout, _old_stderr
     captured = (_sup_err.getvalue() or "") + (_sup_out.getvalue() or "")
@@ -2793,8 +2787,30 @@ def live_verify_api():
             refs, holder_face_filename, id_face_filename
         )
 
+        live_vs_id = None
+        if holder_face_filename and id_face_filename:
+            live_vs_id = _verify_face_pair(
+                _resolve_upload_face_path(holder_face_filename),
+                _resolve_upload_face_path(id_face_filename),
+            )
+
+        from ocr.quality import assess_live_frame, ocr_fields_usable
+        quality = assess_live_frame(img)
+        missing = []
+        if not holder_face_filename:
+            missing.append("live_face")
+        if not id_face_filename:
+            missing.append("id_card_face")
+        if not ocr_fields_usable(parsed_fields):
+            missing.append("ocr_fields")
+        step41_complete = len(missing) == 0
+
         return jsonify(_json_safe({
-            "status": "success",
+            "status": "success" if step41_complete else "incomplete",
+            "step41_complete": step41_complete,
+            "step41_missing": missing,
+            "quality": quality,
+            "document_detected": bool(warped_ok),
             "face_image_url": f"/ocr_uploads/{id_face_filename}" if id_face_filename else None,
             "id_card_face_image_url": f"/ocr_uploads/{id_face_filename}" if id_face_filename else None,
             "holder_face_image_url": f"/ocr_uploads/{holder_face_filename}" if holder_face_filename else None,
@@ -2807,6 +2823,7 @@ def live_verify_api():
             "face_match": match_payload["face_match"],
             "face_match_vs_holder": match_payload["face_match_vs_holder"],
             "face_match_vs_id_card": match_payload["face_match_vs_id_card"],
+            "face_match_live_vs_id": live_vs_id,
             "face_match_details": match_payload["face_match_details"],
             "step3_face_matches": match_payload["step3_face_matches"],
             "reference_faces_used": [r["filename"] for r in refs],

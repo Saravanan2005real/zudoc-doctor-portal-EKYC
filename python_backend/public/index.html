@@ -416,7 +416,7 @@
           <!-- Module 1: live ID capture (mirrored preview CSS, unflipped OCR capture) -->
           <div class="mt-4" id="doc-face-section">
             <h3>🪪 Step 4.1: Hold Aadhaar/PAN — Face Extraction</h3>
-            <p class="subtitle">Hold your Aadhaar or PAN card in front of the camera. Preview is mirrored (CSS); the captured frame is not flipped so PaddleOCR + RetinaFace can read the card.</p>
+            <p class="subtitle">Turn on the camera, hold your face and ID card in view, then click Capture now. Nothing is sent to the model until you click. Step 4.2 starts only after both the live face and the printed ID photo are extracted.</p>
             <div class="video-container">
               <video id="doc-face-video" autoplay muted playsinline></video>
               <div class="video-overlay" id="doc-face-overlay">
@@ -424,10 +424,10 @@
               </div>
             </div>
             <div style="text-align:center; margin: 0.75rem 0;">
-              <button class="btn btn-primary hidden" id="btn-capture-doc-face" type="button">Capture &amp; Extract Face</button>
+              <button class="btn btn-primary hidden" id="btn-capture-doc-face" type="button">Capture now</button>
             </div>
             <div id="doc-face-result" class="mt-2 hidden" style="text-align:center;"></div>
-            <div class="alert alert-info mt-2 text-center" id="doc-face-status">Status: Click Allow Camera, then hold your ID card and capture.</div>
+            <div class="alert alert-info mt-2 text-center" id="doc-face-status">Status: Click Allow Camera, then click Capture now when you are ready.</div>
           </div>
 
           <!-- Module 2: existing FGI-Net eye tracker (live camera + EyeXYGraph) -->
@@ -688,6 +688,6 @@
 
   </main>
 
-  <script src="app.js?v=arcface-honest-1"></script>
+  <script src="app.js?v=match-ui-clean-1"></script>
 </body>
 </html>
