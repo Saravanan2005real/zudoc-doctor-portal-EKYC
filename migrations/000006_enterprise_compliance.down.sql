@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS prescriptions CASCADE;
+DROP TABLE IF EXISTS verification_dead_jobs CASCADE;
+DROP TABLE IF EXISTS audit_events CASCADE;

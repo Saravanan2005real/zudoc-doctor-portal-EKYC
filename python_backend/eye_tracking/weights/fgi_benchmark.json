@@ -1,0 +1,37 @@
+{
+  "system": {
+    "os": "Windows-10-10.0.26200-SP0",
+    "python": "3.10.0",
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
+    "cpu_count_logical": 16,
+    "ram_total_gb": 23.69,
+    "torch": "2.13.0+cpu",
+    "device": "cpu",
+    "cuda_available": false,
+    "gpu_name": null
+  },
+  "model": {
+    "input": "1x3x224x224",
+    "output": "1x2 (pitch,yaw)",
+    "parameters": 1515616,
+    "parameters_M": 1.5156,
+    "trainable_params": 1515616,
+    "state_dict_fp32_MB": 5.987,
+    "checkpoint_file_MB": 6.13
+  },
+  "compute": {
+    "MACs": 380591186.0,
+    "MACs_M": 380.591,
+    "FLOPs_approx_2xMAC": 761182372.0,
+    "FLOPs_G": 0.7612,
+    "latency_ms_mean": 24.625,
+    "latency_ms_std": 1.424,
+    "latency_ms_p50": 24.645,
+    "latency_ms_p95": 27.037,
+    "fps_est": 40.61,
+    "cuda_peak_alloc_MB": null,
+    "process_rss_MB": 239.8,
+    "runs": 50,
+    "warmup": 15
+  }
+}

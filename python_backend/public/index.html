@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MedTrust — Enterprise Doctor Verification System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <div class="nav-container">
+      <div class="logo">
+        <div class="logo-icon">🩺</div>
+        <div class="logo-text">
+          <span class="brand-name">MedTrust</span>
+          <span class="brand-sub">Doctor Verification System</span>
+        </div>
+      </div>
+
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-tab="wizard-view">
+          <span class="tab-icon">👨‍⚕️</span> Doctor Verification Wizard
+        </button>
+        <button class="nav-tab" data-tab="admin-view">
+          <span class="tab-icon">🛡️</span> Admin Portal
+        </button>
+      </nav>
+
+      <div class="user-session" id="user-session-badge">
+        <span class="status-indicator offline"></span>
+        <span id="session-text">Not Logged In</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-content">
+
+    <!-- ==================== VIEW 1: DOCTOR MULTI-STEP WIZARD ==================== -->
+    <section id="wizard-view" class="view-panel active">
+      
+      <!-- Wizard Progress Header -->
+      <div class="wizard-header glass-card">
+        <div class="wizard-stepper">
+          <div class="step-item active" id="step-nav-1" onclick="goToStep(1)">
+            <div class="step-circle">1</div>
+            <div class="step-info">
+              <span class="step-title">Step 1</span>
+              <span class="step-name">Account & OTP</span>
+            </div>
+          </div>
+          <div class="step-connector" id="conn-1"></div>
+          <div class="step-item" id="step-nav-2" onclick="goToStep(2)">
+            <div class="step-circle">2</div>
+            <div class="step-info">
+              <span class="step-title">Step 2</span>
+              <span class="step-name">Credentials & Profile</span>
+            </div>
+          </div>
+          <div class="step-connector" id="conn-2"></div>
+          <div class="step-item" id="step-nav-3" onclick="goToStep(3)">
+            <div class="step-circle">3</div>
+            <div class="step-info">
+              <span class="step-title">Step 3</span>
+              <span class="step-name">Document Vault</span>
+            </div>
+          </div>
+          <div class="step-connector" id="conn-3"></div>
+          <div class="step-item" id="step-nav-4" onclick="goToStep(4)">
+            <div class="step-circle">4</div>
+            <div class="step-info">
+              <span class="step-title">Step 4</span>
+              <span class="step-name">Live Pipeline</span>
+            </div>
+          </div>
+          <div class="step-connector" id="conn-4"></div>
+          <div class="step-item" id="step-nav-5" onclick="goToStep(5)">
+            <div class="step-circle">5</div>
+            <div class="step-info">
+              <span class="step-title">Step 5</span>
+              <span class="step-name">Digital Prescription</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 1: Account Registration & OTP Verification -->
+      <div class="step-page active" id="page-step-1">
+        <div class="glass-card page-card">
+          <div class="page-header">
+            <span class="badge badge-info">Step 1 of 5</span>
+            <h2 id="step-1-title">🔑 Doctor Login</h2>
+            <p class="subtitle" id="step-1-subtitle">Welcome back! Login to continue your verification process.</p>
+          </div>
+
+          <div class="auth-split-pane">
+            <!-- Left Pane -->
+            <div class="auth-left-pane" id="auth-left-pane">
+              <div id="left-pane-signup-content">
+                <h3>New Doctor?</h3>
+                <p>Don't have an account yet? Create one now to start your verification journey.</p>
+                <button class="btn btn-outline" id="btn-toggle-signup">Sign up</button>
+              </div>
+              <div id="left-pane-login-content" class="hidden">
+                <h3>Welcome Back!</h3>
+                <p>Already have an account? Login to continue where you left off.</p>
+                <button class="btn btn-outline" id="btn-toggle-login">Login</button>
+              </div>
+            </div>
+
+            <!-- Right Pane -->
+            <div class="auth-right-pane">
+              <!-- Login Sub-View -->
+              <div id="subview-login">
+                <form id="form-login">
+                  <div class="form-group">
+                    <label>Mobile Number or Email</label>
+                    <input type="text" id="login-identifier" placeholder="Mobile or Email" required>
+                  </div>
+                  <div class="form-group">
+                    <label>Password</label>
+                    <div class="password-wrapper">
+                      <input type="password" id="login-password" placeholder="••••••••••••" required>
+                      <span class="password-toggle">👁️</span>
+                    </div>
+                  </div>
+
+                  <div class="page-footer align-right">
+                    <button type="submit" class="btn btn-success btn-lg">
+                      Login & Continue ➔
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <!-- Registration Sub-View -->
+              <div id="subview-register" class="hidden">
+                <form id="form-register">
+                  <div class="input-grid">
+                    <div class="form-group">
+                      <label>First Name</label>
+                      <input type="text" id="reg-fname" placeholder="Rahul" required>
+                    </div>
+                    <div class="form-group">
+                      <label>Last Name</label>
+                      <input type="text" id="reg-lname" placeholder="Sharma" required>
+                    </div>
+                  </div>
+                  <div class="input-grid">
+                    <div class="form-group">
+                      <label>Mobile Number (+91)</label>
+                      <input type="text" id="reg-mobile" placeholder="+919876543210" required>
+                    </div>
+                    <div class="form-group">
+                      <label>Email Address</label>
+                      <input type="email" id="reg-email" placeholder="rahul.sharma@example.com" required>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>Password</label>
+                    <div class="password-wrapper">
+                      <input type="password" id="reg-password" placeholder="••••••••••••" required>
+                      <span class="password-toggle">👁️</span>
+                    </div>
+                  </div>
+
+                  <div class="page-footer align-right">
+                    <button type="submit" class="btn btn-primary btn-lg">
+                      Register Account & Send OTP ➔
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <!-- OTP Verification Sub-View (Hidden initially) -->
+              <div id="subview-otp" class="hidden">
+                <div class="alert alert-warning">
+                  🔒 OTP Sent to <strong id="otp-mobile-display">+919876543210</strong>. Demo OTP Code: <strong class="code-highlight">123456</strong>
+                </div>
+
+                <div class="otp-box mt-3">
+                  <div class="form-group">
+                    <label>Enter 6-Digit OTP Code</label>
+                    <input type="text" id="otp-input" maxlength="6" placeholder="123456" class="input-lg" required>
+                  </div>
+                  <button id="btn-verify-otp" class="btn btn-success btn-lg btn-block mt-3">
+                    Verify OTP & Proceed to Step 2 ➔
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 2: Medical Profile & Credentials -->
+      <div class="step-page" id="page-step-2">
+        <div class="glass-card page-card">
+          <div class="page-header">
+            <span class="badge badge-secondary">Step 2 of 5</span>
+            <h2>📜 Medical Registration & Qualifications</h2>
+            <p class="subtitle">Add your medical council license, degree qualifications, and clinic practice info.</p>
+          </div>
+
+          <!-- Section 2A: License -->
+          <div class="credential-section">
+            <div class="section-badge">Part A — Medical Registration License</div>
+            <form id="form-license">
+              <div class="input-grid">
+                <div class="form-group">
+                  <label>Registration Number</label>
+                  <input type="text" id="lic-num" placeholder="" required>
+                </div>
+                <div class="form-group">
+                  <label>State / National Medical Council</label>
+                  <select id="lic-council">
+                    <option value="National Medical Commission (NMC)">National Medical Commission (NMC)</option>
+                    <option value="Andhra Pradesh Medical Council">Andhra Pradesh Medical Council</option>
+                    <option value="Arunachal Pradesh Medical Council">Arunachal Pradesh Medical Council</option>
+                    <option value="Assam Medical Council">Assam Medical Council</option>
+                    <option value="Bhopal Medical Council">Bhopal Medical Council</option>
+                    <option value="Bihar Medical Council">Bihar Medical Council</option>
+                    <option value="Bombay Medical Council">Bombay Medical Council</option>
+                    <option value="Chandigarh Medical Council">Chandigarh Medical Council</option>
+                    <option value="Chhattisgarh Medical Council">Chhattisgarh Medical Council</option>
+                    <option value="Delhi Medical Council">Delhi Medical Council</option>
+                    <option value="Goa Medical Council">Goa Medical Council</option>
+                    <option value="Gujarat Medical Council">Gujarat Medical Council</option>
+                    <option value="Haryana Medical Council">Haryana Medical Council</option>
+                    <option value="Himachal Pradesh Medical Council">Himachal Pradesh Medical Council</option>
+                    <option value="Hyderabad Medical Council">Hyderabad Medical Council</option>
+                    <option value="Jammu & Kashmir Medical Council">Jammu & Kashmir Medical Council</option>
+                    <option value="Jharkhand Medical Council">Jharkhand Medical Council</option>
+                    <option value="Karnataka Medical Council">Karnataka Medical Council</option>
+                    <option value="Madhya Pradesh Medical Council">Madhya Pradesh Medical Council</option>
+                    <option value="Madras Medical Council">Madras Medical Council</option>
+                    <option value="Mahakoshal Medical Council">Mahakoshal Medical Council</option>
+                    <option value="Maharashtra Medical Council">Maharashtra Medical Council</option>
+                    <option value="Manipur Medical Council">Manipur Medical Council</option>
+                    <option value="Medical Council of Tanganyika">Medical Council of Tanganyika</option>
+                    <option value="Meghalaya Medical Council">Meghalaya Medical Council</option>
+                    <option value="Mizoram Medical Council">Mizoram Medical Council</option>
+                    <option value="Mysore Medical Council">Mysore Medical Council</option>
+                    <option value="Nagaland Medical Council">Nagaland Medical Council</option>
+                    <option value="Orissa Medical Council">Orissa Medical Council</option>
+                    <option value="Pondicherry Medical Council">Pondicherry Medical Council</option>
+                    <option value="Punjab Medical Council">Punjab Medical Council</option>
+                    <option value="Rajasthan Medical Council">Rajasthan Medical Council</option>
+                    <option value="Sikkim Medical Council">Sikkim Medical Council</option>
+                    <option value="Tamil Nadu Medical Council">Tamil Nadu Medical Council</option>
+                    <option value="Telangana Medical Council">Telangana Medical Council</option>
+                    <option value="Travancore Cochin Medical Council">Travancore Cochin Medical Council</option>
+                    <option value="Tripura Medical Council">Tripura Medical Council</option>
+                    <option value="Uttar Pradesh Medical Council">Uttar Pradesh Medical Council</option>
+                    <option value="Uttarakhand Medical Council">Uttarakhand Medical Council</option>
+                    <option value="Vidarbha Medical Council">Vidarbha Medical Council</option>
+                    <option value="West Bengal Medical Council">West Bengal Medical Council</option>
+                  </select>
+                </div>
+              </div>
+              <div class="input-grid">
+                <div class="form-group">
+                  <label>Registration Year</label>
+                  <input type="number" id="lic-year" placeholder="2022" required>
+                </div>
+                <div class="form-group align-end">
+                  <button type="submit" class="btn btn-outline" id="btn-save-license">Save License Credential</button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <!-- Section 2B: Qualification -->
+          <div class="credential-section mt-4">
+            <div class="section-badge">Part B — Degree & Qualifications</div>
+            <form id="form-qual">
+              <div class="input-grid">
+                <div class="form-group">
+                  <label>Degree Title</label>
+                  <input type="text" id="qual-degree" placeholder="MBBS / MD" required>
+                </div>
+                <div class="form-group">
+                  <label>Specialization</label>
+                  <input type="text" id="qual-spec" placeholder="Cardiology / Internal Medicine">
+                </div>
+              </div>
+              <div class="input-grid">
+                <div class="form-group">
+                  <label>College / University</label>
+                  <input type="text" id="qual-college" placeholder="AIIMS New Delhi" required>
+                </div>
+                <div class="form-group">
+                  <label>Completion Year</label>
+                  <input type="number" id="qual-year" placeholder="2021" required>
+                </div>
+              </div>
+              <div class="align-right">
+                <button type="submit" class="btn btn-outline" id="btn-save-qual">Save Qualification</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Section 2C: Clinic -->
+          <div class="credential-section mt-4">
+            <div class="section-badge">Part C — Clinic Practice Listing</div>
+            <form id="form-clinic">
+              <div class="input-grid">
+                <div class="form-group">
+                  <label>Clinic / Hospital Name</label>
+                  <input type="text" id="clinic-name" placeholder="Apex Heart Clinic" required>
+                </div>
+                <div class="form-group">
+                  <label>City & State</label>
+                  <input type="text" id="clinic-city" placeholder="New Delhi, Delhi" required>
+                </div>
+              </div>
+              <div class="input-grid">
+                <div class="form-group">
+                  <label>Consultation Fee (₹)</label>
+                  <input type="number" id="clinic-fee" placeholder="800" required>
+                </div>
+                <div class="form-group align-end">
+                  <button type="submit" class="btn btn-outline" id="btn-save-clinic">Save Practice Listing</button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <div class="page-footer flex-between mt-4">
+            <button class="btn btn-outline" onclick="goToStep(1)">⬅ Back to Step 1</button>
+            <button class="btn btn-primary btn-lg" id="btn-next-step-2" onclick="goToStep(3)">
+              Proceed to Document Upload (Step 3) ➔
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 3: Document Vault & Secure Upload -->
+      <div class="step-page" id="page-step-3">
+        <div class="glass-card page-card">
+          <div class="page-header">
+            <span class="badge badge-warning">Step 3 of 5</span>
+            <h2>📁 Secure Document Vault Upload</h2>
+            <p class="subtitle">Upload high-resolution scans of your registration certificate, degree, and government identity proof.</p>
+          </div>
+
+          <form id="form-doc-upload">
+            <div class="input-grid">
+              <div class="form-group">
+                <label>Document Category</label>
+                <select id="upload-doc-type" required>
+                  <option value="REGISTRATION_CERTIFICATE">Medical Registration Certificate (Mandatory)</option>
+                  <option value="MEDICAL_DEGREE_CERTIFICATE">Medical Degree Certificate (Mandatory)</option>
+                  <option value="PG_CERTIFICATE">Post Graduate Certificate (Optional)</option>
+                  <option value="AADHAAR">Aadhaar Card (KYC)</option>
+                  <option value="PAN">PAN Card (KYC)</option>
+                  <option value="PASSPORT">Passport (KYC)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Select Document File (PDF, PNG, JPG)</label>
+                <input type="file" id="upload-file-input" accept=".pdf,.png,.jpg,.jpeg" required>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Upload Document to Vault</button>
+          </form>
+
+          <!-- Uploaded Files Table -->
+          <div class="mt-4">
+            <h4>Uploaded Document Vault History</h4>
+            <div class="uploaded-docs-list mt-2" id="doc-vault-table">
+              <div class="text-muted text-center py-3">No documents uploaded yet.</div>
+            </div>
+          </div>
+
+          <!-- Submission Checklist Summary -->
+          <div class="checklist-box mt-4">
+            <h4>Pre-Submission Verification Checklist</h4>
+            <ul class="checklist mt-2" id="wizard-checklist">
+              <li class="check-item" id="chk-mobile"><span class="chk-icon">⚪</span> Mobile OTP Identity Verified</li>
+              <li class="check-item" id="chk-license"><span class="chk-icon">⚪</span> Registration License Credentials Saved</li>
+              <li class="check-item" id="chk-qual"><span class="chk-icon">⚪</span> Qualification Degree Saved</li>
+              <li class="check-item" id="chk-clinic"><span class="chk-icon">⚪</span> Clinic Practice Listing Saved</li>
+              <li class="check-item" id="chk-reg-cert"><span class="chk-icon">⚪</span> Medical Registration Certificate Uploaded (Mandatory)</li>
+              <li class="check-item" id="chk-degree-cert"><span class="chk-icon">⚪</span> Medical Degree Certificate Uploaded (Mandatory)</li>
+              <li class="check-item" id="chk-govt-id"><span class="chk-icon">⚪</span> KYC Proof Uploaded (Aadhaar / PAN / Passport)</li>
+            </ul>
+          </div>
+
+          <div class="page-footer flex-between mt-4">
+            <button class="btn btn-outline" onclick="goToStep(2)">⬅ Back to Step 2</button>
+            <button class="btn btn-success btn-lg" id="btn-submit-verification" disabled>
+              Submit Application for Verification (Step 4) ➔
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 4: Live Verification Pipeline & Status Tracker -->
+      <div class="step-page" id="page-step-4">
+        <div class="glass-card page-card">
+          <div class="page-header flex-between">
+            <div>
+              <span class="badge badge-info">Step 4 of 5</span>
+              <h2>⚡ eKYC Evaluation Pipeline</h2>
+              <p class="subtitle">Live PaddleOCR + RetinaFace evaluation on uploaded Aadhaar/PAN documents, then final decision.</p>
+            </div>
+            <span class="badge badge-warning" id="pipeline-status-badge">QUEUED</span>
+          </div>
+
+          <!-- Liveness Check Section -->
+          <div class="liveness-section mt-4" id="liveness-section">
+            <h3>👁️ Step 4.1: Human Verification</h3>
+            <p class="subtitle text-center">Select your preferred verification method below.</p>
+            
+            <div class="flex-between mb-3" style="gap: 10px; justify-content: center;">
+              <button class="btn btn-outline" id="btn-mode-standard" onclick="selectVerificationMode('standard')">Standard (Eye Tracking)</button>
+              <button class="btn btn-outline" id="btn-mode-accessibility" onclick="selectVerificationMode('accessibility')">Accessibility (Audio/Voice)</button>
+            </div>
+
+            <!-- Standard Eye Tracking UI -->
+            <div id="liveness-standard-ui" class="hidden text-center" style="position: relative;">
+               <!-- Webgazer elements will be injected/shown here -->
+               <div id="webgazer-container" style="position: relative; width: 480px; height: 360px; margin: 0 auto; background: #111; border-radius: 8px; overflow: hidden; border: 2px solid var(--border-color);">
+                  <!-- The video will be mounted by WebGazer -->
+               </div>
+               
+               <div class="progress mt-2" style="height:8px; background:rgba(255,255,255,0.12); border-radius:999px; overflow:hidden; width: 480px; margin: 0 auto;">
+                  <div id="liveness-progress" style="height:100%; width:0%; background:#22c55e; transition:width 0.2s;"></div>
+               </div>
+               
+               <div class="alert alert-info mt-2 text-center" id="liveness-status" style="width: 480px; margin: 0 auto;">Status: Click Start below...</div>
+               
+               <div id="liveness-overlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); border-radius: 8px;">
+                  <button class="btn btn-primary btn-lg" id="btn-start-liveness" type="button">Start WebGazer Eye Tracking</button>
+               </div>
+               
+               <!-- Custom overlays for calibration, random dots, and blink -->
+               <div id="calOverlay" class="hidden" style="position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:9999;">
+                  <div style="color:white; text-align:center; padding-top: 20px;">
+                     <h2>Calibrate WebGazer</h2>
+                     <p>Click each dot 3 times while looking at it.</p>
+                     <div id="calProgress">0 / 9 dots</div>
+                  </div>
+                  <div id="calLayer" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
+               </div>
+
+               <div id="challengeOverlay" class="hidden" style="position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:9999;">
+                  <div style="color:white; text-align:center; padding-top: 20px;">
+                     <h2 id="challengeTitle">Challenge 1</h2>
+                     <p id="challengeHint">Look at the dot</p>
+                     <div id="challengeProgress"></div>
+                  </div>
+                  <div id="challengeDot" style="position:absolute; width:20px; height:20px; background:orange; border-radius:50%; transform:translate(-50%, -50%);"></div>
+                  <div id="gazeReticle" class="hidden" style="position:absolute; width:40px; height:40px; border:2px solid cyan; border-radius:50%; transform:translate(-50%, -50%); pointer-events:none;"></div>
+               </div>
+
+               <div id="blinkOverlay" class="hidden" style="position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:white;">
+                  <h2 id="blinkTitle">Get Ready...</h2>
+                  <p id="blinkHint">Keep your face centered.</p>
+                  <div id="blinkRing" style="width:100px; height:100px; border:4px solid white; border-radius:50%; margin-top:20px;"></div>
+               </div>
+            </div>
+
+            <!-- Accessibility Audio UI -->
+            <div id="liveness-accessibility-ui" class="hidden text-center">
+              <iframe src="disability/index.html" style="width: 100%; height: 500px; border: 2px solid var(--border-color); border-radius: 8px; background: #fff;" allow="camera; microphone"></iframe>
+            </div>
+
+          </div>
+
+          <div class="status-timeline mt-4 hidden" id="pipeline-timeline">
+            <div class="timeline-step" id="tstep-1">
+              <div class="t-icon">📤</div>
+              <div class="t-info">
+                <div class="t-title">Application Submitted</div>
+                <div class="t-desc" id="tdesc-1">Queued in system</div>
+              </div>
+            </div>
+            <div class="timeline-step" id="tstep-2">
+              <div class="t-icon">🔍</div>
+              <div class="t-info">
+                <div class="t-title">eKYC OCR + Face Extraction</div>
+                <div class="t-desc" id="tdesc-2">PaddleOCR + RetinaFace on KYC documents</div>
+              </div>
+            </div>
+            <div class="timeline-step" id="tstep-3">
+              <div class="t-icon">🪪</div>
+              <div class="t-info">
+                <div class="t-title">ID Format & Face Visibility Check</div>
+                <div class="t-desc" id="tdesc-3">Aadhaar/PAN validation + face crop check</div>
+              </div>
+            </div>
+            <div class="timeline-step" id="tstep-4">
+              <div class="t-icon">🧠</div>
+              <div class="t-info">
+                <div class="t-title">Profile Cross-Match</div>
+                <div class="t-desc" id="tdesc-4">Name similarity vs registered doctor profile</div>
+              </div>
+            </div>
+            <div class="timeline-step" id="tstep-5">
+              <div class="t-icon">🏆</div>
+              <div class="t-info">
+                <div class="t-title">Final Verification Decision</div>
+                <div class="t-desc" id="pipeline-decision-desc">Waiting for eKYC model evaluation...</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="ekyc-result-panel" class="mt-4 hidden">
+            <h3 style="margin-bottom: 0.75rem;">eKYC Extracted Results</h3>
+            <div id="ekyc-result-cards" class="grid-2"></div>
+          </div>
+
+          <div class="console-box mt-4" id="pipeline-console">
+            [SYSTEM] Waiting for eKYC evaluation pipeline...
+          </div>
+
+          <div class="page-footer flex-between mt-4">
+            <button class="btn btn-outline" onclick="goToStep(3)">⬅ Back to Step 3</button>
+            <div style="display:flex; gap:0.75rem; align-items:center;">
+              <button class="btn btn-outline" id="btn-retry-ekyc" onclick="beginStep4Liveness()">
+                🔄 Re-run Liveness + eKYC
+              </button>
+              <button class="btn btn-success btn-lg hidden" id="btn-goto-prescription" onclick="goToStep(5)">
+                Unlock & Open Digital Prescription Studio (Step 5) ➔
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 5: Digital Prescription Studio -->
+      <div class="step-page" id="page-step-5">
+        <div class="glass-card page-card">
+          <div class="page-header">
+            <span class="badge badge-success">Step 5 of 5</span>
+            <h2>✍️ RSA-256 Digital Prescription Studio</h2>
+            <p class="subtitle">Issue cryptographically signed, tamper-proof prescriptions with scannable QR Code payloads.</p>
+          </div>
+
+          <form id="form-prescription">
+            <div class="input-grid">
+              <div class="form-group">
+                <label>Verified Doctor Public ID</label>
+                <input type="text" id="rx-doctor-id" placeholder="Paste Verified Doctor Public ID" required>
+              </div>
+              <div class="form-group">
+                <label>Patient ID / Number</label>
+                <input type="text" id="rx-patient-id" placeholder="PAT-90812" required>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Diagnosis & Clinical Remarks</label>
+              <input type="text" id="rx-diagnosis" placeholder="Essential Hypertension & Mild Fever" required>
+            </div>
+
+            <div class="form-group">
+              <label>Prescribed Medicines (JSON Array Format)</label>
+              <textarea id="rx-medicines" rows="3" required>[
+  {"name": "Amoxicillin 500mg", "dosage": "1 Capsule", "frequency": "Twice daily", "duration": "5 Days"},
+  {"name": "Paracetamol 650mg", "dosage": "1 Tablet", "frequency": "As needed", "duration": "3 Days"}
+]</textarea>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block">Generate RSA-256 Digitally Signed Prescription</button>
+          </form>
+
+          <!-- Generated Prescription Display -->
+          <div class="mt-4 hidden" id="prescription-certificate">
+            <div class="rx-paper">
+              <div class="rx-header">
+                <div class="rx-title">OFFICIAL MEDICAL PRESCRIPTION</div>
+                <div class="rx-badge">RSA-256 SIGNED</div>
+              </div>
+
+              <div class="rx-details">
+                <div><strong>Prescription ID:</strong> <span id="rx-out-id">-</span></div>
+                <div><strong>Issued Date:</strong> <span id="rx-out-date">-</span></div>
+                <div><strong>Doctor Public ID:</strong> <span id="rx-out-doc">-</span></div>
+                <div><strong>Patient ID:</strong> <span id="rx-out-patient">-</span></div>
+                <div><strong>Diagnosis:</strong> <span id="rx-out-diagnosis">-</span></div>
+              </div>
+
+              <div class="rx-meds-title">Prescribed Medication (Rx)</div>
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Medicine Name</th>
+                    <th>Dosage</th>
+                    <th>Frequency</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody id="rx-meds-tbody">
+                </tbody>
+              </table>
+
+              <div class="rx-signature-box">
+                <div class="qr-box">QR Payload Verified</div>
+                <div class="sig-details">
+                  <div class="sig-title">Cryptographic RSA-256 Signature:</div>
+                  <div class="sig-key" id="rx-out-sig">-</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="text-right mt-3">
+              <button class="btn btn-outline" onclick="window.print()">Print / Download PDF</button>
+            </div>
+          </div>
+
+          <div class="page-footer flex-between mt-4">
+            <button class="btn btn-outline" onclick="goToStep(4)">⬅ Back to Step 4</button>
+            <button class="btn btn-primary" onclick="goToStep(1)">Restart Onboarding Wizard 🔄</button>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ==================== VIEW 2: ADMIN PORTAL ==================== -->
+    <section id="admin-view" class="view-panel">
+      
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-val" id="metric-total-docs">0</div>
+          <div class="metric-lbl">Total Registered Doctors</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val text-warning" id="metric-pending-verifications">0</div>
+          <div class="metric-lbl">Pending Review Queue</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val text-success" id="metric-verified-rate">0%</div>
+          <div class="metric-lbl">Auto-Verification Rate</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val text-danger" id="metric-dlq-count">0</div>
+          <div class="metric-lbl">Dead Letter Queue Jobs</div>
+        </div>
+      </div>
+
+      <div class="glass-card mt-4">
+        <div class="card-header">
+          <h3>🔍 Verification Operations Queue</h3>
+          <div class="search-controls">
+            <input type="text" id="admin-search-input" placeholder="Search doctor by name, mobile, or public ID...">
+            <button id="btn-admin-search" class="btn btn-outline">Search</button>
+            <button id="btn-admin-refresh" class="btn btn-primary">Refresh Analytics</button>
+          </div>
+        </div>
+
+        <table class="data-table mt-3">
+          <thead>
+            <tr>
+              <th>Doctor Name</th>
+              <th>Public ID</th>
+              <th>Mobile</th>
+              <th>Status</th>
+              <th>Risk Score</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="admin-verifications-tbody">
+            <tr>
+              <td colspan="6" class="text-center py-3 text-muted">Click "Refresh Analytics" or submit a doctor application to view queue.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Inspector Drawer Modal -->
+      <div class="glass-card mt-4 hidden" id="admin-inspector-card">
+        <div class="card-header">
+          <h3>🔎 Side-by-Side Verification Inspector</h3>
+          <button class="btn btn-outline btn-sm" id="btn-close-inspector">Close Inspector</button>
+        </div>
+
+        <div class="inspector-grid">
+          <div class="inspector-col">
+            <div class="col-title">👨‍⚕️ Doctor Submitted Claim</div>
+            <div class="info-group"><label>Doctor ID:</label><div class="val-text" id="insp-doc-id">-</div></div>
+            <div class="info-group"><label>Full Name:</label><div class="val-text" id="insp-doc-name">-</div></div>
+            <div class="info-group"><label>Reg Number:</label><div class="val-text" id="insp-doc-reg-num">-</div></div>
+            <div class="info-group"><label>Council:</label><div class="val-text" id="insp-doc-council">-</div></div>
+          </div>
+
+          <div class="inspector-col">
+            <div class="col-title">🏛️ NMC Registry Data</div>
+            <div class="info-group"><label>Registry Name:</label><div class="val-text" id="insp-registry-name">-</div></div>
+            <div class="info-group"><label>Registry Status:</label><div class="val-text" id="insp-registry-status">-</div></div>
+            <div class="info-group"><label>Levenshtein Match:</label><div class="val-text highlighted" id="insp-match-score">-</div></div>
+          </div>
+
+          <div class="inspector-col">
+            <div class="col-title">🛡️ Risk Score & Actions</div>
+            <div class="info-group"><label>Fraud Score:</label><div class="val-text" id="insp-fraud-score">-</div></div>
+            <div class="admin-actions-box mt-3">
+              <button id="btn-action-approve" class="btn btn-success btn-block">Approve Doctor</button>
+              <button id="btn-action-reject" class="btn btn-danger btn-block mt-2">Reject Application</button>
+              <button id="btn-action-req-docs" class="btn btn-warning btn-block mt-2">Request Better Scans</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <script src="webgazer.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
