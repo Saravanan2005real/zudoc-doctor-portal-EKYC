@@ -14,7 +14,16 @@ const state = {
   },
   uploadedDocuments: [],
   inspectingDoctorID: null,
+  step41Complete: false,
+  liveIdResult: null,
+  liveFaceCheck: null,
+  liveFrame: null,
+  gazeSummary: null,
+  livenessResult: null,
+  livenessMode: null,
 };
+
+let pipelineRunning = false;
 
 const API_BASE = window.location.origin;
 
@@ -93,13 +102,51 @@ window.goToStep = function(stepNum) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 
   if (stepNum === 4) {
-    if (!livenessActive && !livenessStarting) {
+    if (!state.step41Complete) {
       beginStep4Liveness();
     }
   } else {
-    stopLivenessCamera();
+    stopIdHoldCamera();
+    if (typeof stopLivenessCamera === 'function') {
+      stopLivenessCamera();
+    }
+  }
+
+  if (stepNum === 3) {
+    refreshVaultFromServer();
   }
 };
+
+// Documents vaulted in earlier sessions must be visible here, otherwise a stale
+// ID sits in the database where the doctor can neither see nor delete it, and
+// then surfaces unexpectedly in the Step 4 results.
+async function refreshVaultFromServer() {
+  if (!state.activeDoctor || !state.activeDoctor.public_id) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/doctors/documents`, {
+      headers: { 'X-Doctor-Public-ID': state.activeDoctor.public_id },
+    });
+    if (!resp.ok) return;
+    const docs = await resp.json();
+    if (!Array.isArray(docs)) return;
+
+    const sessionIds = new Set(state.uploadedDocuments.map((d) => d.document_id));
+    docs.forEach((doc) => {
+      if (!sessionIds.has(doc.document_id)) {
+        state.uploadedDocuments.push({ ...doc, fromPreviousSession: true });
+      }
+    });
+
+    state.checklist.regCertUploaded = state.uploadedDocuments.some((d) => d.document_type === 'REGISTRATION_CERTIFICATE');
+    state.checklist.degreeCertUploaded = state.uploadedDocuments.some((d) => d.document_type === 'MEDICAL_DEGREE_CERTIFICATE');
+    state.checklist.govtIdUploaded = state.uploadedDocuments.some((d) => ['AADHAAR', 'PAN', 'PASSPORT'].includes(d.document_type));
+
+    updateWizardChecklistUI();
+    renderVaultTable();
+  } catch (_) {
+    // Vault hydration is best-effort; uploads still work without it.
+  }
+}
 
 // -------------------------------------------------------------
 // STEP 1: Registration, Login & OTP Verification
@@ -500,7 +547,9 @@ function renderVaultTable() {
       <td>${doc.original_filename}</td>
       <td>v${doc.version}</td>
       <td><code>${(doc.file_hash || 'N/A').toString().substring(0, 10)}...</code></td>
-      <td><span class="badge badge-success">Clean / Vaulted</span></td>
+      <td>${doc.fromPreviousSession
+        ? '<span class="badge badge-warning">Earlier session</span>'
+        : '<span class="badge badge-success">Clean / Vaulted</span>'}</td>
       <td>
         <button class="btn btn-outline btn-sm delete-doc-btn" onclick="deleteDocument('${doc.document_id}')" style="border: 1px solid #ef4444; color: #ef4444; padding: 0.25rem 0.5rem;" title="Delete Document">
           <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
@@ -546,23 +595,12 @@ function setCheckNode(id, isDone) {
 function selectVerificationMode(mode) {
   const stdUi = document.getElementById('liveness-standard-ui');
   const accUi = document.getElementById('liveness-accessibility-ui');
-  const btnStd = document.getElementById('btn-mode-standard');
-  const btnAcc = document.getElementById('btn-mode-accessibility');
-
   if (mode === 'standard') {
-    stdUi.classList.remove('hidden');
-    accUi.classList.add('hidden');
-    btnStd.classList.add('btn-primary');
-    btnStd.classList.remove('btn-outline');
-    btnAcc.classList.add('btn-outline');
-    btnAcc.classList.remove('btn-primary');
+    if (stdUi) stdUi.classList.remove('hidden');
+    if (accUi) accUi.classList.add('hidden');
   } else {
-    stdUi.classList.add('hidden');
-    accUi.classList.remove('hidden');
-    btnAcc.classList.add('btn-primary');
-    btnAcc.classList.remove('btn-outline');
-    btnStd.classList.add('btn-outline');
-    btnStd.classList.remove('btn-primary');
+    if (stdUi) stdUi.classList.add('hidden');
+    if (accUi) accUi.classList.remove('hidden');
   }
 }
 window.selectVerificationMode = selectVerificationMode;
@@ -571,6 +609,11 @@ function initStep4Pipeline() {
   const btnStartLiveness = document.getElementById('btn-start-liveness');
   if (btnStartLiveness) {
     btnStartLiveness.addEventListener('click', runWebgazerPipeline);
+  }
+
+  const btnCapture = document.getElementById('btn-capture-live-id');
+  if (btnCapture) {
+    btnCapture.addEventListener('click', captureAndVerifyLiveId);
   }
 
   // Listen for iframe postMessage from disability module
@@ -585,21 +628,229 @@ function initStep4Pipeline() {
   });
 }
 
+let livenessActive = false;
+let livenessStarting = false;
+
+function stopLivenessCamera() {
+  livenessActive = false;
+  livenessStarting = false;
+
+  try {
+    if (typeof webgazer !== 'undefined') {
+      if (typeof webgazer.clearGazeListener === 'function') webgazer.clearGazeListener();
+      if (typeof webgazer.end === 'function') webgazer.end();
+    }
+  } catch (_) {}
+
+  ['webgazerVideoFeed', 'ekyc-cam-feed'].forEach((id) => {
+    const video = document.getElementById(id);
+    if (video && video.srcObject) {
+      try {
+        video.srcObject.getTracks().forEach((t) => t.stop());
+      } catch (_) {}
+      video.srcObject = null;
+    }
+  });
+  mesh.landmarks = null;
+  if (typeof resetGaze === 'function') resetGaze();
+  if (typeof stopSpeech === 'function') stopSpeech();
+
+  const overlays = ['challengeOverlay', 'gazeReticle', 'blinkOverlay', 'calOverlay', 'wg-boot-overlay', 'audioOverlay'];
+  overlays.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hidden');
+  });
+  document.documentElement.style.overflow = '';
+  document.body.style.overflow = '';
+}
+window.stopLivenessCamera = stopLivenessCamera;
+
+function stopIdHoldCamera() {
+  const video = document.getElementById('live-id-webcam');
+  if (video && video.srcObject) {
+    try {
+      video.srcObject.getTracks().forEach((t) => t.stop());
+    } catch (_) {}
+    video.srcObject = null;
+  }
+}
+
+async function startIdHoldCamera() {
+  const video = document.getElementById('live-id-webcam');
+  if (!video) return;
+  if (video.srcObject) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+    });
+    video.srcObject = stream;
+  } catch (err) {
+    alert('Webcam access denied or unavailable: ' + (err.message || err));
+  }
+}
+
 function beginStep4Liveness() {
+  state.step41Complete = false;
+  state.gazeSummary = null;
+  state.livenessResult = null;
+  state.liveIdResult = null;
+  state.liveFaceCheck = null;
+  state.liveFrame = null;
+  state.livenessMode = null;
   resetPipelineUI();
-  document.getElementById('liveness-section').classList.remove('hidden');
-  selectVerificationMode('standard');
+  const liveId = document.getElementById('live-id-section');
+  const liveness = document.getElementById('liveness-section');
+  const timeline = document.getElementById('pipeline-timeline');
+  const choice = document.getElementById('liveness-mode-choice');
+  if (liveId) liveId.classList.remove('hidden');
+  if (liveness) liveness.classList.add('hidden');
+  if (choice) choice.classList.add('hidden');
+  if (timeline) timeline.classList.add('hidden');
+  const tick = document.getElementById('live-id-tick');
+  if (tick) tick.classList.add('hidden');
+  const btn = document.getElementById('btn-capture-live-id');
+  if (btn) {
+    btn.disabled = false;
+    btn.classList.remove('hidden');
+  }
+  startIdHoldCamera();
 }
 window.beginStep4Liveness = beginStep4Liveness;
 
+function proceedToStep42() {
+  stopIdHoldCamera();
+  const liveId = document.getElementById('live-id-section');
+  if (liveId) liveId.classList.add('hidden');
+  const choice = document.getElementById('liveness-mode-choice');
+  if (!choice) {
+    runWebgazerPipeline();
+    return;
+  }
+  choice.classList.remove('hidden');
+  const first = document.getElementById('btn-mode-eye');
+  if (first) first.focus();
+
+  // The picker has to be usable without seeing it, otherwise the accessible
+  // path is unreachable for the people it exists for.
+  speak('Choose a verification method. Press 1 for the eye tracking check, or press 2 for the audio guided check.');
+  document.addEventListener('keydown', modeChoiceKeyHandler);
+}
+
+function modeChoiceKeyHandler(event) {
+  const choice = document.getElementById('liveness-mode-choice');
+  if (!choice || choice.classList.contains('hidden')) {
+    document.removeEventListener('keydown', modeChoiceKeyHandler);
+    return;
+  }
+  if (event.key === '1') chooseLivenessMode('eye');
+  if (event.key === '2') chooseLivenessMode('audio');
+}
+
+window.chooseLivenessMode = function (mode) {
+  document.removeEventListener('keydown', modeChoiceKeyHandler);
+  stopSpeech();
+  const choice = document.getElementById('liveness-mode-choice');
+  if (choice) choice.classList.add('hidden');
+  const liveness = document.getElementById('liveness-section');
+  if (liveness) liveness.classList.remove('hidden');
+  state.livenessMode = mode === 'audio' ? 'audio' : 'eye';
+
+  const standard = document.getElementById('liveness-standard-ui');
+  const accessible = document.getElementById('liveness-accessibility-ui');
+  if (state.livenessMode === 'audio') {
+    if (standard) standard.classList.add('hidden');
+    if (accessible) accessible.classList.remove('hidden');
+    runAudioLivenessPipeline();
+  } else {
+    if (accessible) accessible.classList.add('hidden');
+    if (standard) standard.classList.remove('hidden');
+    runWebgazerPipeline();
+  }
+};
+
+function grabFrameDataUrl(video) {
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.9);
+}
+
+// Runs while the user is already in Step 4.2, so the eye-tracking flow never
+// waits on RetinaFace. The verdict is picked up when the results panel renders.
+function startLiveFaceCheck(dataUrl) {
+  state.liveFaceCheck = fetch(`${API_BASE}/api/v1/live_face_check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: dataUrl }),
+  })
+    .then(async (resp) => {
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || data.person_detected === undefined) {
+        const detail = data.error || data.detail || `HTTP ${resp.status}`;
+        throw new Error(
+          resp.status === 404 || resp.status === 405
+            ? 'live face check endpoint not found — restart the portal (python main.py)'
+            : detail
+        );
+      }
+      return data;
+    })
+    .then((data) => {
+      state.liveIdResult = data;
+      return data;
+    })
+    .catch((err) => {
+      state.liveIdResult = { status: 'failed', error: err.message };
+      return state.liveIdResult;
+    });
+}
+
+async function captureAndVerifyLiveId() {
+  const video = document.getElementById('live-id-webcam');
+  const btn = document.getElementById('btn-capture-live-id');
+  const tick = document.getElementById('live-id-tick');
+  if (!video || video.readyState < 2) {
+    alert('Camera is not ready yet. Allow camera access and try again.');
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  if (tick) tick.classList.remove('hidden');
+
+  let dataUrl = null;
+  try {
+    dataUrl = grabFrameDataUrl(video);
+  } catch (err) {
+    console.warn('Frame capture failed:', err);
+  }
+
+  state.step41Complete = true;
+  state.liveFrame = dataUrl;
+  if (dataUrl) {
+    state.liveIdResult = { status: 'pending' };
+    startLiveFaceCheck(dataUrl);
+  } else {
+    state.liveIdResult = { status: 'failed', error: 'Could not read a frame from the camera' };
+  }
+
+  await wait(900);
+  proceedToStep42();
+}
+
 // --- WebGazer + MediaPipe Implementation ---
 
-const CLICKS_PER_CAL_DOT = 3;
+const CAL_HOVER_MS = 2000;
+const CAL_SAMPLE_INTERVAL_MS = 80;
+const CAL_MIN_VALID_PER_DOT = 10;
+const GAZE_SMOOTH = 0.28;
+const GAZE_SPIKE_PX = 420;
 const CHALLENGE_COUNT = 4;
 const CHALLENGE_SETTLE_MS = 900;
 const CHALLENGE_HOLD_MS = 2800;
-const GAZE_HIT_RATIO = 0.32;
-const HEAD_DRIFT_FAIL = 0.07;
+const GAZE_HIT_RATIO = 0.22;
+const HEAD_DRIFT_FAIL = 0.12;
 const BLINK_EAR_DROP = 0.045;
 const BLINK_TIMEOUT_MS = 8000;
 
@@ -608,15 +859,15 @@ function gazeHitRadius() {
 }
 
 const CAL_DOTS = [
-  { id: 1, x: 0.1, y: 0.16 },
-  { id: 2, x: 0.5, y: 0.16 },
-  { id: 3, x: 0.9, y: 0.16 },
-  { id: 4, x: 0.1, y: 0.5 },
+  { id: 1, x: 0, y: 0 },
+  { id: 2, x: 0.5, y: 0 },
+  { id: 3, x: 1, y: 0 },
+  { id: 4, x: 0, y: 0.5 },
   { id: 5, x: 0.5, y: 0.5 },
-  { id: 6, x: 0.9, y: 0.5 },
-  { id: 7, x: 0.1, y: 0.86 },
-  { id: 8, x: 0.5, y: 0.86 },
-  { id: 9, x: 0.9, y: 0.86 },
+  { id: 6, x: 1, y: 0.5 },
+  { id: 7, x: 0, y: 1 },
+  { id: 8, x: 0.5, y: 1 },
+  { id: 9, x: 1, y: 1 },
 ];
 
 const NOSE = 1;
@@ -625,6 +876,7 @@ const RIGHT_EYE = [362, 385, 387, 263, 373, 380];
 
 const mesh = {
   ready: false,
+  loopRunning: false,
   faceMesh: null,
   landmarks: null,
   noseBaseline: null,
@@ -633,27 +885,264 @@ const mesh = {
   headDrift: 0,
 };
 
-const gaze = { x: null, y: null };
+const gaze = { x: null, y: null, at: 0 };
+const gazeSmooth = { x: null, y: null };
+const wgPred = { x: null, y: null, at: 0 };
+
+// --- Iris-based gaze model -------------------------------------------------
+// WebGazer's own ridge regression is very noisy on laptop webcams, so the 9-dot
+// calibration also trains a small ridge model on MediaPipe iris landmarks and
+// that model drives the reticle whenever it is available.
+
+const IRIS_L = [468, 469, 470, 471, 472];
+const IRIS_R = [473, 474, 475, 476, 477];
+const GAZE_FEATURES = 7;
+const GAZE_RIDGE_LAMBDA = 1e-4;
+const GAZE_MIN_SAMPLES = 45;
+const GAZE_STALE_MS = 700;
+
+const gazeModel = { ready: false, wx: null, wy: null, samples: [], source: 'none' };
+
+function centroid(lm, idx) {
+  let x = 0;
+  let y = 0;
+  for (const i of idx) {
+    if (!lm[i]) return null;
+    x += lm[i].x;
+    y += lm[i].y;
+  }
+  return { x: x / idx.length, y: y / idx.length };
+}
+
+function meshFeatures(lm) {
+  if (!lm || !lm[477]) return null;
+  const li = centroid(lm, IRIS_L);
+  const ri = centroid(lm, IRIS_R);
+  if (!li || !ri) return null;
+
+  const lOuter = lm[33];
+  const lInner = lm[133];
+  const lUp = lm[159];
+  const lLow = lm[145];
+  const rInner = lm[362];
+  const rOuter = lm[263];
+  const rUp = lm[386];
+  const rLow = lm[374];
+  if (!lOuter || !lInner || !lUp || !lLow || !rInner || !rOuter || !rUp || !rLow) return null;
+
+  const safe = (v) => (Math.abs(v) < 1e-6 ? 1e-6 : v);
+  const exL = (li.x - lOuter.x) / safe(lInner.x - lOuter.x);
+  const eyL = (li.y - lUp.y) / safe(lLow.y - lUp.y);
+  const exR = (ri.x - rInner.x) / safe(rOuter.x - rInner.x);
+  const eyR = (ri.y - rUp.y) / safe(rLow.y - rUp.y);
+
+  const nose = lm[NOSE];
+  if (!nose) return null;
+  const midX = (lOuter.x + rOuter.x) / 2;
+  const midY = (lOuter.y + rOuter.y) / 2;
+  const iod = safe(Math.hypot(rOuter.x - lOuter.x, rOuter.y - lOuter.y));
+  const yaw = (nose.x - midX) / iod;
+  const pitch = (nose.y - midY) / iod;
+
+  const f = [1, exL, eyL, exR, eyR, yaw, pitch];
+  return f.every((v) => Number.isFinite(v)) ? f : null;
+}
+
+function solveLinearSystem(A, b) {
+  const n = b.length;
+  const M = A.map((row, i) => row.concat([b[i]]));
+  for (let c = 0; c < n; c++) {
+    let pivot = c;
+    for (let r = c + 1; r < n; r++) {
+      if (Math.abs(M[r][c]) > Math.abs(M[pivot][c])) pivot = r;
+    }
+    if (Math.abs(M[pivot][c]) < 1e-12) return null;
+    const tmp = M[c];
+    M[c] = M[pivot];
+    M[pivot] = tmp;
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const factor = M[r][c] / M[c][c];
+      if (!factor) continue;
+      for (let k = c; k <= n; k++) M[r][k] -= factor * M[c][k];
+    }
+  }
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) out[i] = M[i][n] / M[i][i];
+  return out.every((v) => Number.isFinite(v)) ? out : null;
+}
+
+function fitRidge(rows, targets) {
+  const n = GAZE_FEATURES;
+  const A = Array.from({ length: n }, () => new Array(n).fill(0));
+  const b = new Array(n).fill(0);
+  for (let k = 0; k < rows.length; k++) {
+    const f = rows[k];
+    for (let i = 0; i < n; i++) {
+      b[i] += f[i] * targets[k];
+      for (let j = 0; j < n; j++) A[i][j] += f[i] * f[j];
+    }
+  }
+  const scale = Math.max(1, rows.length);
+  for (let i = 1; i < n; i++) A[i][i] += GAZE_RIDGE_LAMBDA * scale;
+  return solveLinearSystem(A, b);
+}
+
+function trainGazeModel() {
+  const rows = gazeModel.samples.map((s) => s.f);
+  if (rows.length < GAZE_MIN_SAMPLES) return false;
+  const wx = fitRidge(rows, gazeModel.samples.map((s) => s.x));
+  const wy = fitRidge(rows, gazeModel.samples.map((s) => s.y));
+  if (!wx || !wy) return false;
+  // Reject a model that cannot even reproduce its own training points: that
+  // means the user moved their head around during calibration and its
+  // predictions would be worse than WebGazer's.
+  let sq = 0;
+  for (const s of gazeModel.samples) {
+    sq += (applyWeights(wx, s.f) - s.x) ** 2 + (applyWeights(wy, s.f) - s.y) ** 2;
+  }
+  const rms = Math.sqrt(sq / gazeModel.samples.length);
+  const diag = Math.hypot(window.innerWidth, window.innerHeight);
+  if (!Number.isFinite(rms) || rms > diag * 0.35) return false;
+
+  gazeModel.wx = wx;
+  gazeModel.wy = wy;
+  gazeModel.ready = true;
+  gazeModel.rms = rms;
+  return true;
+}
+
+function applyWeights(w, f) {
+  let sum = 0;
+  for (let i = 0; i < GAZE_FEATURES; i++) sum += w[i] * f[i];
+  return sum;
+}
+
+function meshGazePoint() {
+  if (!gazeModel.ready || !mesh.landmarks) return null;
+  const f = meshFeatures(mesh.landmarks);
+  if (!f) return null;
+  const x = applyWeights(gazeModel.wx, f);
+  const y = applyWeights(gazeModel.wy, f);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const margin = 260;
+  return {
+    x: Math.min(window.innerWidth + margin, Math.max(-margin, x)),
+    y: Math.min(window.innerHeight + margin, Math.max(-margin, y)),
+  };
+}
+
+function ingestGaze(data) {
+  if (!data || !Number.isFinite(data.x) || !Number.isFinite(data.y)) return;
+  if (gazeSmooth.x == null) {
+    gazeSmooth.x = data.x;
+    gazeSmooth.y = data.y;
+  } else {
+    const jump = Math.hypot(data.x - gazeSmooth.x, data.y - gazeSmooth.y);
+    const alpha = jump > GAZE_SPIKE_PX ? 0.12 : GAZE_SMOOTH;
+    gazeSmooth.x = alpha * data.x + (1 - alpha) * gazeSmooth.x;
+    gazeSmooth.y = alpha * data.y + (1 - alpha) * gazeSmooth.y;
+  }
+  gaze.x = gazeSmooth.x;
+  gaze.y = gazeSmooth.y;
+  gaze.at = performance.now();
+}
+
+function resetGaze() {
+  gaze.x = null;
+  gaze.y = null;
+  gaze.at = 0;
+  gazeSmooth.x = null;
+  gazeSmooth.y = null;
+  wgPred.x = null;
+  wgPred.y = null;
+  wgPred.at = 0;
+}
+
+function rawGaze() {
+  const meshPoint = meshGazePoint();
+  if (meshPoint) {
+    gazeModel.source = 'iris';
+    return meshPoint;
+  }
+  let pred = null;
+  try {
+    pred = typeof webgazer !== 'undefined' && webgazer.getCurrentPrediction ? webgazer.getCurrentPrediction() : null;
+  } catch (_) {}
+  if (!pred && wgPred.x != null && performance.now() - wgPred.at < GAZE_STALE_MS) pred = wgPred;
+  if (pred && Number.isFinite(pred.x) && Number.isFinite(pred.y)) {
+    gazeModel.source = 'webgazer';
+    return { x: pred.x, y: pred.y };
+  }
+  return null;
+}
 
 function readGaze() {
-  let x = gaze.x;
-  let y = gaze.y;
-  try {
-    const pred = webgazer.getCurrentPrediction && webgazer.getCurrentPrediction();
-    if (pred && typeof pred.x === "number" && typeof pred.y === "number") {
-      x = pred.x; y = pred.y; gaze.x = x; gaze.y = y;
-    }
-  } catch (_) {}
-  return x != null && y != null ? { x, y } : null;
+  const raw = rawGaze();
+  if (raw) ingestGaze(raw);
+  if (gaze.x == null || performance.now() - gaze.at > GAZE_STALE_MS) return null;
+  return { x: gaze.x, y: gaze.y };
 }
 
 function storeCalibrationSample(cx, cy) {
+  if (mesh.landmarks) {
+    const f = meshFeatures(mesh.landmarks);
+    if (f) gazeModel.samples.push({ f, x: cx, y: cy });
+  }
   try {
-    if (typeof webgazer.recordScreenPosition === "function") webgazer.recordScreenPosition(cx, cy, "click");
+    if (typeof webgazer !== 'undefined' && typeof webgazer.recordScreenPosition === 'function') {
+      webgazer.recordScreenPosition(cx, cy, 'click');
+    }
   } catch (_) {}
-  try {
-    if (typeof webgazer.storePoints === "function") webgazer.storePoints(cx, cy, 0);
-  } catch (_) {}
+}
+
+function calDotPoint(dot) {
+  const padX = Math.max(40, Math.round(window.innerWidth * 0.07));
+  const padY = Math.max(72, Math.round(window.innerHeight * 0.12));
+  const x = padX + dot.x * (window.innerWidth - 2 * padX);
+  const y = padY + dot.y * (window.innerHeight - 2 * padY);
+  return { x, y };
+}
+
+// WebGazer's own DOM stays exactly where WebGazer put it: reparenting the
+// <video> pauses playback in Chrome and starves both trackers. Hiding is done
+// purely in CSS (off-screen, opacity 0, display kept as block).
+function hideWebgazerUi() {
+  const video = document.getElementById('webgazerVideoFeed');
+  if (!video) return;
+  video.muted = true;
+  video.playsInline = true;
+  if (video.paused) {
+    const play = video.play();
+    if (play && typeof play.catch === 'function') play.catch(() => {});
+  }
+}
+
+const overlayHomes = new WeakMap();
+
+function attachFullscreenOverlay(el) {
+  if (!el) return;
+  if (!overlayHomes.has(el) && el.parentElement && el.parentElement !== document.body) {
+    overlayHomes.set(el, el.parentElement);
+  }
+  document.body.appendChild(el);
+  el.classList.remove('hidden');
+  document.documentElement.style.overflow = 'hidden';
+  document.body.style.overflow = 'hidden';
+  hideWebgazerUi();
+}
+
+function detachFullscreenOverlay(el) {
+  if (!el) return;
+  el.classList.add('hidden');
+  const home = overlayHomes.get(el) || document.getElementById('liveness-standard-ui');
+  if (home && el.parentElement !== home) home.appendChild(el);
+  document.documentElement.style.overflow = '';
+  document.body.style.overflow = '';
+}
+
+function hideCalOverlay() {
+  detachFullscreenOverlay(document.getElementById('calOverlay'));
 }
 
 function wait(ms) {
@@ -678,6 +1167,10 @@ function meanEar(lm) {
 }
 
 async function initFaceMesh() {
+  if (mesh.ready && mesh.faceMesh) {
+    startMeshLoop();
+    return;
+  }
   if (typeof FaceMesh === "undefined") {
     throw new Error("MediaPipe FaceMesh script failed to load");
   }
@@ -693,6 +1186,12 @@ async function initFaceMesh() {
       return;
     }
     mesh.landmarks = res.multiFaceLandmarks[0];
+    if (!mesh.loggedShape) {
+      mesh.loggedShape = true;
+      console.info(
+        `FaceMesh landmarks: ${mesh.landmarks.length}${mesh.landmarks.length >= 478 ? ' (iris available)' : ' (no iris — gaze falls back to WebGazer)'}`
+      );
+    }
     mesh.lastEar = meanEar(mesh.landmarks);
     if (mesh.noseBaseline) {
       const nose = mesh.landmarks[NOSE];
@@ -706,13 +1205,51 @@ async function initFaceMesh() {
   startMeshLoop();
 }
 
+function getTrackingVideo() {
+  const wg = document.getElementById('webgazerVideoFeed');
+  if (wg && wg.readyState >= 2 && wg.videoWidth > 0) return wg;
+  const own = document.getElementById('ekyc-cam-feed');
+  if (own && own.readyState >= 2 && own.videoWidth > 0) return own;
+  return null;
+}
+
+// Fallback camera: if WebGazer never manages to open the webcam, tracking still
+// needs frames for the iris model and blink detection.
+async function ensureFallbackCamera() {
+  const wg = document.getElementById('webgazerVideoFeed');
+  if (wg && wg.readyState >= 2 && wg.videoWidth > 0) return true;
+  let video = document.getElementById('ekyc-cam-feed');
+  if (video && video.srcObject) return true;
+  if (!video) {
+    video = document.createElement('video');
+    video.id = 'ekyc-cam-feed';
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    document.body.appendChild(video);
+  }
+  try {
+    video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+    });
+    await video.play().catch(() => {});
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function startMeshLoop() {
+  if (mesh.loopRunning) return;
+  mesh.loopRunning = true;
   let busy = false;
   const tick = async () => {
-    const video = document.getElementById("webgazerVideoFeed");
-    if (mesh.faceMesh && video && video.readyState >= 2 && video.videoWidth > 0 && !busy) {
+    const video = getTrackingVideo();
+    if (mesh.faceMesh && video && !busy) {
       busy = true;
-      try { await mesh.faceMesh.send({ image: video }); } catch (_) {}
+      try {
+        await mesh.faceMesh.send({ image: video });
+      } catch (_) {}
       busy = false;
     }
     requestAnimationFrame(tick);
@@ -729,66 +1266,148 @@ function captureHeadBaseline() {
   return true;
 }
 
-async function waitForFace(timeoutMs) {
+async function waitForFace(timeoutMs, onProgress) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    const video = document.getElementById("webgazerVideoFeed");
-    if (video && video.readyState >= 2 && mesh.landmarks) return true;
-    await wait(120);
+    if (getTrackingVideo() && mesh.landmarks && meshFeatures(mesh.landmarks)) return true;
+    if (onProgress) {
+      const left = Math.max(0, Math.ceil((timeoutMs - (Date.now() - t0)) / 1000));
+      onProgress(getTrackingVideo() ? `Looking for your face… ${left}s` : `Waiting for camera… ${left}s`);
+    }
+    await wait(150);
   }
   return false;
 }
 
 function step2Calibrate() {
   return new Promise((resolve, reject) => {
-    document.getElementById('calOverlay').classList.remove('hidden');
+    const overlay = document.getElementById('calOverlay');
     const calLayer = document.getElementById('calLayer');
-    calLayer.innerHTML = "";
-    const clicks = {};
-    let samples = 0;
+    if (!overlay || !calLayer) {
+      reject(new Error('Calibration overlay missing'));
+      return;
+    }
+
+    attachFullscreenOverlay(overlay);
+    calLayer.innerHTML = '';
+    gazeModel.samples = [];
+    gazeModel.ready = false;
+
+    const completed = {};
+    let finished = false;
+    const hoverState = { id: null, raf: 0, samples: 0, valid: 0 };
+
+    const faceState = document.getElementById('calFaceState');
+    const faceWatch = setInterval(() => {
+      if (!faceState) return;
+      const ok = !!mesh.landmarks;
+      faceState.textContent = ok ? 'Face detected' : 'Face not detected — move into the light';
+      faceState.className = ok ? 'cal-face-ok' : 'cal-face-bad';
+    }, 250);
 
     const updateProgress = () => {
-      const done = CAL_DOTS.filter((d) => (clicks[d.id] || 0) >= CLICKS_PER_CAL_DOT).length;
-      document.getElementById('calProgress').textContent = `${done} / ${CAL_DOTS.length} dots`;
+      const done = CAL_DOTS.filter((d) => completed[d.id]).length;
+      const el = document.getElementById('calProgress');
+      if (el) el.textContent = `${done} / ${CAL_DOTS.length} dots`;
     };
     updateProgress();
 
+    const stopHover = (btn) => {
+      hoverState.id = null;
+      if (hoverState.raf) cancelAnimationFrame(hoverState.raf);
+      hoverState.raf = 0;
+      hoverState.samples = 0;
+      hoverState.valid = 0;
+      if (btn && !btn.classList.contains('cal-done')) btn.style.setProperty('--cal-pct', '0%');
+    };
+
+    const finishAll = () => {
+      if (finished) return;
+      finished = true;
+      clearInterval(faceWatch);
+      window.removeEventListener('resize', layoutDots);
+      const trained = trainGazeModel();
+      console.info(
+        trained
+          ? `Gaze model trained on ${gazeModel.samples.length} iris samples (rms ${Math.round(gazeModel.rms)}px)`
+          : `Gaze model not trained (${gazeModel.samples.length} samples) — falling back to WebGazer`
+      );
+      hideCalOverlay();
+      wait(400).then(resolve);
+    };
+
+    const layoutDots = () => {
+      CAL_DOTS.forEach((dot) => {
+        const btn = calLayer.querySelector(`[data-cal-id="${dot.id}"]`);
+        if (!btn) return;
+        const pt = calDotPoint(dot);
+        btn.style.left = `${pt.x}px`;
+        btn.style.top = `${pt.y}px`;
+      });
+    };
+
     CAL_DOTS.forEach((dot) => {
-      clicks[dot.id] = 0;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "cal-dot";
-      btn.style.left = `${dot.x * 100}%`;
-      btn.style.top = `${dot.y * 100}%`;
-      btn.style.position = "absolute";
-      btn.style.width = "40px";
-      btn.style.height = "40px";
-      btn.style.borderRadius = "50%";
-      btn.style.background = "white";
-      btn.style.color = "black";
-      btn.style.transform = "translate(-50%, -50%)";
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cal-dot';
+      btn.dataset.calId = String(dot.id);
       btn.textContent = String(dot.id);
-      
-      btn.addEventListener("click", () => {
-        if (btn.style.background === "green") return;
+      btn.style.setProperty('--cal-pct', '0%');
+      const pt = calDotPoint(dot);
+      btn.style.left = `${pt.x}px`;
+      btn.style.top = `${pt.y}px`;
+
+      const tick = (startedAt) => {
+        if (hoverState.id !== dot.id || finished || completed[dot.id]) return;
+        const elapsed = performance.now() - startedAt;
+        const pct = Math.min(100, (elapsed / CAL_HOVER_MS) * 100);
+        btn.style.setProperty('--cal-pct', `${pct}%`);
+
         const rect = btn.getBoundingClientRect();
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
-        storeCalibrationSample(cx, cy);
-        clicks[dot.id] += 1;
-        samples += 1;
-        updateProgress();
+        const before = gazeModel.samples.length;
+        if (elapsed - hoverState.samples * CAL_SAMPLE_INTERVAL_MS >= CAL_SAMPLE_INTERVAL_MS) {
+          storeCalibrationSample(cx, cy);
+          hoverState.samples += 1;
+          if (gazeModel.samples.length > before) hoverState.valid += 1;
+        }
 
-        if (clicks[dot.id] >= CLICKS_PER_CAL_DOT) {
-          btn.style.background = "green";
+        // Give the dot more time when the face is not being tracked, so a dot is
+        // never "completed" without any usable training data behind it.
+        const enough = hoverState.valid >= CAL_MIN_VALID_PER_DOT;
+        if (elapsed >= CAL_HOVER_MS && (enough || elapsed >= CAL_HOVER_MS * 2.5)) {
+          completed[dot.id] = true;
+          btn.classList.add('cal-done');
+          btn.style.setProperty('--cal-pct', '100%');
+          storeCalibrationSample(cx, cy);
+          stopHover(btn);
+          updateProgress();
+          if (CAL_DOTS.every((d) => completed[d.id])) finishAll();
+          return;
         }
-        if (CAL_DOTS.every((d) => clicks[d.id] >= CLICKS_PER_CAL_DOT)) {
-          document.getElementById('calOverlay').classList.add('hidden');
-          wait(700).then(resolve);
-        }
+        hoverState.raf = requestAnimationFrame(() => tick(startedAt));
+      };
+
+      btn.addEventListener('pointerenter', () => {
+        if (completed[dot.id] || finished) return;
+        hoverState.id = dot.id;
+        hoverState.samples = 0;
+        hoverState.valid = 0;
+        const rect = btn.getBoundingClientRect();
+        storeCalibrationSample(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        hoverState.raf = requestAnimationFrame(() => tick(performance.now()));
       });
+      btn.addEventListener('pointerleave', () => {
+        if (completed[dot.id]) return;
+        stopHover(btn);
+      });
+      btn.addEventListener('click', (e) => e.preventDefault());
+
       calLayer.appendChild(btn);
     });
+
+    window.addEventListener('resize', layoutDots);
   });
 }
 
@@ -800,12 +1419,43 @@ function randomDotPosition(index) {
   return { x: Math.min(0.85, Math.max(0.15, zone.x + jitterX)) * window.innerWidth, y: Math.min(0.82, Math.max(0.22, zone.y + jitterY)) * window.innerHeight };
 }
 
+function trackReticle(active) {
+  const reticle = document.getElementById('gazeReticle');
+  if (!reticle) return () => {};
+  reticle.classList.remove('hidden');
+  let raf = 0;
+  const tick = () => {
+    const g = readGaze();
+    if (g) {
+      reticle.classList.remove('searching');
+      reticle.style.left = `${g.x}px`;
+      reticle.style.top = `${g.y}px`;
+      const t = active();
+      const locked = t && dist(g.x, g.y, t.x, t.y) <= gazeHitRadius();
+      reticle.classList.toggle('locked', !!locked);
+    } else {
+      reticle.classList.add('searching');
+      reticle.classList.remove('locked');
+    }
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  return () => {
+    cancelAnimationFrame(raf);
+    reticle.classList.add('hidden');
+    reticle.classList.remove('locked', 'searching');
+  };
+}
+
 function runChallenge(target, durationMs) {
   return new Promise((resolve) => {
-    let hits = 0; let samples = 0; let maxDrift = 0; let sumDist = 0;
+    let hits = 0;
+    let samples = 0;
+    let maxDrift = 0;
+    let sumDist = 0;
     const radius = gazeHitRadius();
     const t0 = performance.now();
-    const reticle = document.getElementById('gazeReticle');
+    const progress = document.getElementById('challengeProgress');
 
     const tick = () => {
       const elapsed = performance.now() - t0;
@@ -815,16 +1465,24 @@ function runChallenge(target, durationMs) {
         const d = dist(g.x, g.y, target.x, target.y);
         sumDist += d;
         if (d <= radius) hits += 1;
-        if (reticle && !reticle.classList.contains('hidden')) {
-          reticle.style.left = `${g.x}px`; reticle.style.top = `${g.y}px`;
-        }
       }
       maxDrift = Math.max(maxDrift, mesh.headDrift || 0);
+
+      if (progress) {
+        const pct = Math.round(Math.min(100, (elapsed / durationMs) * 100));
+        progress.textContent = samples
+          ? `Tracking ${pct}%  ·  on target ${Math.round((hits / samples) * 100)}%`
+          : 'Looking for your eyes…';
+      }
 
       if (elapsed >= durationMs) {
         const gazeRatio = samples ? hits / samples : 0;
         const avgDist = samples ? sumDist / samples : Infinity;
-        resolve({ gazeOk: samples >= 8 && (gazeRatio >= GAZE_HIT_RATIO || avgDist <= radius * 1.15), headOk: maxDrift <= HEAD_DRIFT_FAIL });
+        resolve({
+          gazeOk: samples >= 8 && (gazeRatio >= GAZE_HIT_RATIO || avgDist <= radius * 1.15),
+          headOk: maxDrift <= HEAD_DRIFT_FAIL,
+          samples,
+        });
         return;
       }
       requestAnimationFrame(tick);
@@ -834,28 +1492,40 @@ function runChallenge(target, durationMs) {
 }
 
 async function step3to6Challenges() {
-  document.getElementById('challengeOverlay').classList.remove('hidden');
-  document.getElementById('gazeReticle').classList.remove('hidden');
-  let gazePasses = 0; let headPasses = 0;
+  const overlay = document.getElementById('challengeOverlay');
+  const dotEl = document.getElementById('challengeDot');
+  attachFullscreenOverlay(overlay);
 
-  for (let i = 0; i < CHALLENGE_COUNT; i++) {
-    document.getElementById('challengeTitle').textContent = `Challenge ${i + 1} of ${CHALLENGE_COUNT}`;
-    document.getElementById('challengeProgress').textContent = `Eyes only, do not move head!`;
-    const target = randomDotPosition(i);
-    document.getElementById('challengeDot').style.left = `${target.x}px`;
-    document.getElementById('challengeDot').style.top = `${target.y}px`;
-    await wait(CHALLENGE_SETTLE_MS);
-    captureHeadBaseline();
-    const outcome = await runChallenge(target, CHALLENGE_HOLD_MS);
-    if (outcome.gazeOk) gazePasses++;
-    if (outcome.headOk) headPasses++;
-    await wait(400);
+  let target = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  const stopReticle = trackReticle(() => target);
+  let gazePasses = 0;
+  let headPasses = 0;
+
+  try {
+    for (let i = 0; i < CHALLENGE_COUNT; i++) {
+      hideWebgazerUi();
+      document.getElementById('challengeTitle').textContent = `Look here  ·  ${i + 1} / ${CHALLENGE_COUNT}`;
+      document.getElementById('challengeHint').textContent = 'Watch the orange dot. Keep your head still.';
+      document.getElementById('challengeProgress').textContent = 'Get ready…';
+      target = randomDotPosition(i);
+      if (dotEl) {
+        dotEl.style.left = `${target.x}px`;
+        dotEl.style.top = `${target.y}px`;
+      }
+      await wait(CHALLENGE_SETTLE_MS);
+      captureHeadBaseline();
+      const outcome = await runChallenge(target, CHALLENGE_HOLD_MS);
+      if (outcome.gazeOk) gazePasses++;
+      if (outcome.headOk) headPasses++;
+      await wait(400);
+    }
+  } finally {
+    stopReticle();
+    detachFullscreenOverlay(overlay);
   }
 
-  document.getElementById('challengeOverlay').classList.add('hidden');
-  document.getElementById('gazeReticle').classList.add('hidden');
-  const need = Math.max(2, Math.ceil(CHALLENGE_COUNT * 0.5));
-  return gazePasses >= need && headPasses >= need;
+  state.gazeSummary = { gazePasses, headPasses, total: CHALLENGE_COUNT, source: gazeModel.source };
+  return true;
 }
 
 function waitForBlink(openEar, timeoutMs) {
@@ -877,8 +1547,13 @@ function waitForBlink(openEar, timeoutMs) {
 }
 
 async function step7Blink() {
-  document.getElementById('blinkOverlay').classList.remove('hidden');
-  document.getElementById('blinkTitle').textContent = "Get ready...";
+  const overlay = document.getElementById('blinkOverlay');
+  const title = document.getElementById('blinkTitle');
+  const hint = document.getElementById('blinkHint');
+  attachFullscreenOverlay(overlay);
+  hideWebgazerUi();
+  title.textContent = 'Get ready...';
+  hint.textContent = 'Face the screen. Blink once when asked.';
   await wait(1200);
   const openSamples = [];
   const baseStart = performance.now();
@@ -888,83 +1563,445 @@ async function step7Blink() {
   }
   const openEar = openSamples.length > 0 ? openSamples.reduce((a, b) => a + b, 0) / openSamples.length : 0.25;
 
-  document.getElementById('blinkTitle').textContent = "Blink once now";
-  const blinked = await waitForBlink(openEar, BLINK_TIMEOUT_MS);
-  document.getElementById('blinkOverlay').classList.add('hidden');
+  title.textContent = 'Blink once now';
+  let blinked = await waitForBlink(openEar, BLINK_TIMEOUT_MS / 2);
+  if (!blinked) {
+    hint.textContent = 'Blink not detected yet — try one more clear blink.';
+    blinked = await waitForBlink(openEar, BLINK_TIMEOUT_MS / 2);
+  }
+
+  title.textContent = blinked ? 'Blink detected' : 'Blink not detected';
+  hint.textContent = blinked ? 'Liveness signal captured.' : 'Continuing — this will be flagged in the report.';
+  await wait(700);
+  detachFullscreenOverlay(overlay);
   return blinked;
 }
 
-async function runWebgazerPipeline() {
-  document.getElementById('btn-start-liveness').disabled = true;
-  document.getElementById('liveness-overlay').style.display = 'none';
-  document.getElementById('liveness-status').innerText = 'Initializing WebGazer... Please allow camera access.';
+// --- Accessible (audio guided) liveness -----------------------------------
+// Same goal as the eye-tracking check, but nothing has to be seen on screen:
+// spoken prompts ask for head turns and blinks, which are measured from the
+// MediaPipe face mesh.
+
+const AUDIO_YAW_THRESHOLD = 0.16;
+const AUDIO_TURN_TIMEOUT_MS = 12000;
+const AUDIO_BLINK_TARGET = 2;
+const AUDIO_BLINK_TIMEOUT_MS = 14000;
+
+function speak(text) {
+  try {
+    if (!('speechSynthesis' in window)) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+  } catch (_) {}
+}
+
+function stopSpeech() {
+  try {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  } catch (_) {}
+}
+
+let audioCtx = null;
+
+// Short tones so a blind user gets feedback without waiting for speech.
+function playTone(frequency, durationMs) {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    audioCtx = audioCtx || new Ctx();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = frequency;
+    osc.type = 'sine';
+    gain.gain.value = 0.08;
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + durationMs / 1000);
+  } catch (_) {}
+}
+
+const chime = {
+  ok: () => playTone(880, 180),
+  fail: () => playTone(220, 300),
+  next: () => playTone(560, 120),
+};
+
+function currentYaw() {
+  if (!mesh.landmarks) return null;
+  const f = meshFeatures(mesh.landmarks);
+  return f ? f[5] : null;
+}
+
+function announce(instruction, status) {
+  const instrEl = document.getElementById('audioInstruction');
+  const statusEl = document.getElementById('audioStatus');
+  if (instrEl && instruction != null) instrEl.textContent = instruction;
+  if (statusEl && status != null) statusEl.textContent = status;
+}
+
+function renderAudioSteps(total, doneCount, activeIndex) {
+  const box = document.getElementById('audioStepDots');
+  if (!box) return;
+  let html = '';
+  for (let i = 0; i < total; i++) {
+    const cls = i < doneCount ? 'done' : i === activeIndex ? 'active' : '';
+    html += `<span class="${cls}"></span>`;
+  }
+  box.innerHTML = html;
+}
+
+// Waits for a head turn away from the baseline and back to centre. Accepts
+// either direction (webcam feeds are mirrored inconsistently), optionally
+// requiring the opposite side to the previous turn.
+function waitForHeadTurn(baseline, forbidSign, timeoutMs) {
+  return new Promise((resolve) => {
+    const t0 = performance.now();
+    let peak = 0;
+    let peakSign = 0;
+    let turned = false;
+
+    const tick = () => {
+      const yaw = currentYaw();
+      if (yaw != null) {
+        const delta = yaw - baseline;
+        const sign = Math.sign(delta);
+        if (!turned && Math.abs(delta) >= AUDIO_YAW_THRESHOLD && sign !== forbidSign) {
+          turned = true;
+          peak = Math.abs(delta);
+          peakSign = sign;
+          chime.next();
+          announce(null, 'Good — now return to centre');
+          speak('Good. Now face forward again.');
+        } else if (turned && Math.abs(delta) < AUDIO_YAW_THRESHOLD * 0.45) {
+          resolve({ ok: true, sign: peakSign, peak });
+          return;
+        }
+      }
+      if (performance.now() - t0 >= timeoutMs) {
+        resolve({ ok: false, sign: peakSign, peak });
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+function waitForBlinks(openEar, count, timeoutMs) {
+  return new Promise((resolve) => {
+    const threshold = Math.max(0.12, openEar - BLINK_EAR_DROP);
+    const t0 = performance.now();
+    let closed = false;
+    let blinks = 0;
+
+    const tick = () => {
+      const ear = mesh.lastEar;
+      if (ear != null) {
+        if (!closed && ear < threshold) {
+          closed = true;
+        } else if (closed && ear > openEar - BLINK_EAR_DROP * 0.4) {
+          closed = false;
+          blinks += 1;
+          chime.next();
+          announce(null, `${blinks} of ${count} blinks detected`);
+          if (blinks >= count) {
+            resolve(blinks);
+            return;
+          }
+        }
+      }
+      if (performance.now() - t0 >= timeoutMs) {
+        resolve(blinks);
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+async function measureOpenEar(durationMs) {
+  const samples = [];
+  const t0 = performance.now();
+  while (performance.now() - t0 < durationMs) {
+    if (mesh.lastEar != null) samples.push(mesh.lastEar);
+    await wait(40);
+  }
+  return samples.length ? samples.reduce((a, b) => a + b, 0) / samples.length : 0.25;
+}
+
+async function runAudioLivenessPipeline() {
+  livenessStarting = true;
+  const overlay = document.getElementById('audioOverlay');
+  attachFullscreenOverlay(overlay);
+  renderAudioSteps(3, 0, -1);
+
+  const checks = [
+    { label: 'Face detected and tracked live', passed: false },
+    { label: 'First head turn completed', passed: false },
+    { label: 'Second head turn to the other side', passed: false },
+    { label: 'Two deliberate blinks detected', passed: false },
+  ];
 
   try {
-    if (typeof webgazer === "undefined") throw new Error("WebGazer failed to load");
-    webgazer.saveDataAcrossSessions(false);
-    webgazer.setRegression("ridge");
-    webgazer.setTracker("TFFacemesh");
-    webgazer.applyKalmanFilter(true);
-    webgazer.showVideoPreview(true);
-    webgazer.showFaceOverlay(true);
-    webgazer.showFaceFeedbackBox(true);
-    webgazer.showPredictionPoints(false);
-    webgazer.setGazeListener((data) => {
-      if (data) { gaze.x = data.x; gaze.y = data.y; }
-    });
-    
-    // Attempt to move webgazer video into our container
-    await webgazer.begin();
-    
-    // Reparent webgazer elements to our container
-    const wgVideo = document.getElementById("webgazerVideoFeed");
-    const wgCanvas = document.getElementById("webgazerVideoCanvas");
-    const wgFace = document.getElementById("webgazerFaceOverlay");
-    const wgFeedback = document.getElementById("webgazerFaceFeedbackBox");
-    const container = document.getElementById("webgazer-container");
-    
-    if (wgVideo && container) container.appendChild(wgVideo);
-    if (wgCanvas && container) container.appendChild(wgCanvas);
-    if (wgFace && container) container.appendChild(wgFace);
-    if (wgFeedback && container) container.appendChild(wgFeedback);
-    
-    document.getElementById('liveness-status').innerText = 'Loading FaceMesh...';
-    await initFaceMesh();
+    announce('Getting the camera ready.', 'Starting…');
+    speak('Audio verification. Please face the camera and listen for instructions.');
 
-    document.getElementById('liveness-status').innerText = 'Waiting for Face...';
-    const faceOk = await waitForFace(15000);
-    if (!faceOk) throw new Error("Face not detected. Center yourself and try again.");
-
-    document.getElementById('liveness-status').innerText = 'Calibrating...';
-    await step2Calibrate();
-
-    document.getElementById('liveness-status').innerText = 'Follow the dots...';
-    const checksPassed = await step3to6Challenges();
-    if (!checksPassed) throw new Error("Gaze or Head stability failed.");
-
-    document.getElementById('liveness-status').innerText = 'Blink Challenge...';
-    const blinked = await step7Blink();
-    if (!blinked) throw new Error("Blink not detected.");
-
-    // SUCCESS
-    document.getElementById('liveness-status').innerText = 'Human Verification Passed!';
+    await ensureFallbackCamera();
     try {
-        webgazer.clearGazeListener && webgazer.clearGazeListener();
-        await webgazer.clearData();
-        webgazer.end();
-    } catch (_) {}
-    
-    document.getElementById('liveness-section').classList.add('hidden');
-    const timeline = document.getElementById('pipeline-timeline');
-    if (timeline) timeline.classList.remove('hidden');
-    startPipelineAnimation();
+      await initFaceMesh();
+    } catch (err) {
+      console.warn('FaceMesh unavailable:', err);
+    }
+    if (!getTrackingVideo()) await ensureFallbackCamera();
 
+    livenessStarting = false;
+    livenessActive = true;
+
+    const faceFound = await waitForFace(20000, (msg) => announce(null, msg));
+    checks[0].passed = !!faceFound;
+    if (!faceFound) {
+      announce('Face not detected.', 'Could not find your face');
+      speak('I could not find your face. Please make sure the camera is not covered.');
+      chime.fail();
+      await wait(2500);
+    } else {
+      chime.ok();
+      announce('Hold still for a moment.', 'Face found');
+      speak('Thank you, I can see you. Hold still.');
+      await wait(1500);
+    }
+
+    const baseline = currentYaw() ?? 0;
+
+    // Turn one
+    renderAudioSteps(3, 0, 0);
+    announce('Slowly turn your head to your left, then back to the centre.', 'Waiting for a head turn');
+    speak('Slowly turn your head to your left, then bring it back to the centre.');
+    const turn1 = await waitForHeadTurn(baseline, 0, AUDIO_TURN_TIMEOUT_MS);
+    checks[1].passed = turn1.ok;
+    if (turn1.ok) {
+      chime.ok();
+      renderAudioSteps(3, 1, 1);
+      speak('Great.');
+    } else {
+      chime.fail();
+      renderAudioSteps(3, 0, 1);
+      speak('I did not detect that turn. Let us continue.');
+    }
+    await wait(900);
+
+    // Turn two, in the opposite direction to whatever was detected first
+    announce('Now turn your head to your right, then back to the centre.', 'Waiting for the other side');
+    speak('Now turn your head to your right, then back to the centre.');
+    const turn2 = await waitForHeadTurn(baseline, turn1.ok ? turn1.sign : 0, AUDIO_TURN_TIMEOUT_MS);
+    checks[2].passed = turn2.ok;
+    if (turn2.ok) {
+      chime.ok();
+      renderAudioSteps(3, 2, 2);
+      speak('Perfect.');
+    } else {
+      chime.fail();
+      speak('I did not detect that turn. Moving on.');
+    }
+    await wait(900);
+
+    // Blinks
+    announce('Please blink twice, slowly.', 'Waiting for two blinks');
+    speak('Last step. Please blink twice, slowly.');
+    const openEar = await measureOpenEar(700);
+    const blinks = await waitForBlinks(openEar, AUDIO_BLINK_TARGET, AUDIO_BLINK_TIMEOUT_MS);
+    checks[3].passed = blinks >= AUDIO_BLINK_TARGET;
+    checks[3].detail = `${blinks}/${AUDIO_BLINK_TARGET} blinks`;
+    renderAudioSteps(3, checks[3].passed ? 3 : 2, -1);
+
+    const passed = checks.filter((c) => c.passed).length;
+    let verdict = 'NOT_CONFIRMED';
+    if (checks[0].passed && checks[3].passed && (checks[1].passed || checks[2].passed)) verdict = 'REAL_PERSON';
+    else if (checks[0].passed && (checks[3].passed || checks[1].passed || checks[2].passed)) verdict = 'LIKELY_REAL';
+
+    state.livenessResult = {
+      verdict,
+      checks,
+      confidence: Math.round((passed / checks.length) * 100),
+      tracker: 'audio-guided (face mesh)',
+      calibrated: true,
+      mode: 'audio',
+    };
+
+    if (verdict === 'NOT_CONFIRMED') {
+      chime.fail();
+      announce('Verification could not be confirmed.', 'Not confirmed');
+      speak('I could not confirm the checks. The result will be sent for manual review.');
+    } else {
+      chime.ok();
+      announce('Verification complete. Thank you.', 'Complete');
+      speak('Verification complete. Thank you.');
+    }
+    await wait(2200);
   } catch (err) {
     console.error(err);
-    alert("Verification Failed: " + (err.message || String(err)));
-    document.getElementById('btn-start-liveness').disabled = false;
-    document.getElementById('liveness-overlay').style.display = 'flex';
-    document.getElementById('liveness-status').innerText = 'Check Failed. Click Start to try again.';
+  } finally {
+    stopSpeech();
+    detachFullscreenOverlay(overlay);
+    const accessible = document.getElementById('liveness-accessibility-ui');
+    if (accessible) accessible.classList.add('hidden');
+    if (!state.livenessResult) {
+      state.livenessResult = {
+        verdict: 'NOT_CONFIRMED',
+        checks,
+        confidence: 0,
+        tracker: 'audio-guided (face mesh)',
+        calibrated: false,
+        mode: 'audio',
+      };
+    }
+    await finishLivenessAndPipeline();
+  }
+}
+
+// Turns the raw Step 4.2 measurements into the "is this a real person" verdict
+// shown in the Step 4 report.
+function buildLivenessVerdict(faceFound, blinked) {
+  const summary = state.gazeSummary || { gazePasses: 0, headPasses: 0, total: CHALLENGE_COUNT, source: 'none' };
+  const gazeFollowed = summary.gazePasses > 0;
+  const headStill = summary.headPasses >= Math.ceil(summary.total / 2);
+
+  const checks = [
+    { label: 'Face detected and tracked live', passed: !!faceFound },
+    { label: 'Eyes followed the moving target', passed: gazeFollowed, detail: `${summary.gazePasses}/${summary.total} targets` },
+    { label: 'Head stayed still (no photo swap)', passed: headStill, detail: `${summary.headPasses}/${summary.total} checks` },
+    { label: 'Spontaneous blink detected', passed: !!blinked },
+  ];
+
+  const passed = checks.filter((c) => c.passed).length;
+  let verdict = 'NOT_CONFIRMED';
+  if (faceFound && blinked && gazeFollowed) verdict = 'REAL_PERSON';
+  else if (faceFound && (blinked || gazeFollowed)) verdict = 'LIKELY_REAL';
+
+  return {
+    verdict,
+    checks,
+    confidence: Math.round((passed / checks.length) * 100),
+    tracker: summary.source,
+    calibrated: !!gazeModel.ready,
+  };
+}
+
+async function finishLivenessAndPipeline() {
+  detachFullscreenOverlay(document.getElementById('wg-boot-overlay'));
+  detachFullscreenOverlay(document.getElementById('challengeOverlay'));
+  detachFullscreenOverlay(document.getElementById('blinkOverlay'));
+  hideCalOverlay();
+  stopLivenessCamera();
+  const liveSec = document.getElementById('liveness-section');
+  if (liveSec) liveSec.classList.add('hidden');
+  const timeline = document.getElementById('pipeline-timeline');
+  if (timeline) timeline.classList.remove('hidden');
+  await startPipelineAnimation();
+}
+
+async function startWebgazer() {
+  if (typeof webgazer === 'undefined') return false;
+  try {
+    if (typeof webgazer.end === 'function') webgazer.end();
+  } catch (_) {}
+
+  try {
+    webgazer.saveDataAcrossSessions(false);
+    webgazer.setRegression('ridge');
+    webgazer.setTracker('TFFacemesh');
+    webgazer.applyKalmanFilter(true);
+    if (webgazer.params) {
+      webgazer.params.showVideo = false;
+      webgazer.params.showFaceOverlay = false;
+      webgazer.params.showFaceFeedbackBox = false;
+      webgazer.params.showGazeDot = false;
+    }
+    webgazer.setGazeListener((data) => {
+      if (!data || !Number.isFinite(data.x) || !Number.isFinite(data.y)) return;
+      wgPred.x = data.x;
+      wgPred.y = data.y;
+      wgPred.at = performance.now();
+    });
+
+    let timedOut = false;
+    await Promise.race([
+      webgazer.begin(),
+      wait(12000).then(() => {
+        timedOut = true;
+      }),
+    ]);
+
+    // These only work once begin() has built the DOM, so they run after.
+    try {
+      webgazer.showVideoPreview(false);
+      webgazer.showFaceOverlay(false);
+      webgazer.showFaceFeedbackBox(false);
+      webgazer.showPredictionPoints(false);
+    } catch (_) {}
+    hideWebgazerUi();
+    return !timedOut;
+  } catch (err) {
+    console.warn('WebGazer failed to start:', err);
+    return false;
+  }
+}
+
+async function runWebgazerPipeline() {
+  livenessStarting = true;
+  const boot = document.getElementById('wg-boot-overlay');
+  const status = document.getElementById('wgBootStatus');
+  const setStatus = (text) => {
+    if (status) status.textContent = text;
+  };
+  attachFullscreenOverlay(boot);
+  resetGaze();
+  gazeModel.ready = false;
+  gazeModel.samples = [];
+
+  try {
+    setStatus('Starting camera…');
+    const wgOk = await startWebgazer();
+    livenessStarting = false;
+    livenessActive = true;
+    if (!wgOk) {
+      setStatus('Opening camera directly…');
+      await ensureFallbackCamera();
+    }
+
+    setStatus('Loading face landmarks…');
+    try {
+      await initFaceMesh();
+    } catch (err) {
+      console.warn('FaceMesh unavailable:', err);
+    }
+
+    if (!getTrackingVideo()) await ensureFallbackCamera();
+
+    const faceFound = await waitForFace(15000, setStatus);
+    if (!faceFound) {
+      setStatus('Face not detected — continuing anyway');
+      await wait(900);
+    } else {
+      setStatus('Ready');
+      await wait(300);
+    }
+
+    hideWebgazerUi();
+    detachFullscreenOverlay(boot);
+    await step2Calibrate();
+    await step3to6Challenges();
+    const blinked = await step7Blink();
+    state.livenessResult = buildLivenessVerdict(faceFound, blinked);
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (!state.livenessResult) state.livenessResult = buildLivenessVerdict(!!mesh.landmarks, false);
+    detachFullscreenOverlay(boot);
+    await finishLivenessAndPipeline();
   }
 }
 
@@ -974,17 +2011,29 @@ function resetPipelineUI() {
     if (el) el.classList.remove('active', 'failed', 'warn');
   }
   const badge = document.getElementById('pipeline-status-badge');
-  badge.innerText = 'RUNNING';
-  badge.className = 'badge badge-warning';
-  document.getElementById('pipeline-decision-desc').innerText = 'Waiting for eKYC model evaluation...';
-  document.getElementById('pipeline-console').innerText = '[SYSTEM] Starting eKYC evaluation pipeline...';
-  document.getElementById('btn-goto-prescription').classList.add('hidden');
-  document.getElementById('ekyc-result-panel').classList.add('hidden');
-  document.getElementById('ekyc-result-cards').innerHTML = '';
+  if (badge) {
+    badge.innerText = 'RUNNING';
+    badge.className = 'badge badge-warning';
+  }
+  const desc = document.getElementById('pipeline-decision-desc');
+  if (desc) desc.innerText = 'Waiting for eKYC model evaluation...';
+  const consoleBox = document.getElementById('pipeline-console');
+  if (consoleBox) consoleBox.innerText = '[SYSTEM] Starting eKYC evaluation pipeline...';
+  const btnRx = document.getElementById('btn-goto-prescription');
+  if (btnRx) btnRx.classList.add('hidden');
+  const panel = document.getElementById('ekyc-result-panel');
+  if (panel) panel.classList.add('hidden');
+  const cards = document.getElementById('ekyc-result-cards');
+  if (cards) cards.innerHTML = '';
+  const livePanel = document.getElementById('live-person-panel');
+  if (livePanel) livePanel.classList.add('hidden');
+  const liveCard = document.getElementById('live-person-card');
+  if (liveCard) liveCard.innerHTML = '';
 }
 
 function logPipe(msg) {
   const consoleBox = document.getElementById('pipeline-console');
+  if (!consoleBox) return;
   const time = new Date().toLocaleTimeString();
   consoleBox.innerText += `\n[${time}] ${msg}`;
   consoleBox.scrollTop = consoleBox.scrollHeight;
@@ -998,6 +2047,85 @@ function activateStage(stageId, status, detail) {
   if (status === 'warn') el.classList.add('warn');
   const desc = document.getElementById(stageId === 5 ? 'pipeline-decision-desc' : `tdesc-${stageId}`);
   if (desc && detail) desc.innerText = detail;
+}
+
+const LIVE_VERDICT_LABELS = {
+  REAL_PERSON: { text: 'REAL PERSON CONFIRMED', badge: 'badge-success' },
+  LIKELY_REAL: { text: 'LIKELY REAL — PARTIAL SIGNALS', badge: 'badge-warning' },
+  NOT_CONFIRMED: { text: 'NOT CONFIRMED', badge: 'badge-danger' },
+};
+
+function renderLivePersonCard() {
+  const panel = document.getElementById('live-person-panel');
+  const card = document.getElementById('live-person-card');
+  if (!panel || !card) return;
+
+  const liveness = state.livenessResult;
+  const faceCheck = state.liveIdResult || {};
+  let verdictKey = liveness ? liveness.verdict : 'NOT_CONFIRMED';
+  // A frame with no live face in it overrides the eye-tracking result: the
+  // Step 4.1 check can land after the verdict was first computed.
+  if (faceCheck.person_detected === false) verdictKey = 'NOT_CONFIRMED';
+  const verdict = LIVE_VERDICT_LABELS[verdictKey] || LIVE_VERDICT_LABELS.NOT_CONFIRMED;
+
+  const mark = (ok) => (ok
+    ? '<span style="color:#22c55e;font-weight:700;">PASS</span>'
+    : '<span style="color:#ef4444;font-weight:700;">FAIL</span>');
+
+  const checks = (liveness ? liveness.checks : []).map((c) => `
+      <li style="margin:0.2rem 0;">
+        ${mark(c.passed)} &nbsp;${c.label}${c.detail ? ` <span class="text-muted">(${c.detail})</span>` : ''}
+      </li>`).join('');
+
+  const thumb = (src, caption) => `
+    <figure style="margin:0;text-align:center;">
+      <img src="${src}" alt="${caption}" style="width:96px;height:96px;object-fit:cover;border-radius:8px;" />
+      <figcaption class="text-muted" style="font-size:0.75rem;">${caption}</figcaption>
+    </figure>`;
+
+  // Step 4.1 is presented as evidence, not prose: the captured frame, plus the
+  // detected crops and their pass/fail rows only when detection actually ran.
+  let detection = '';
+  const crops = [];
+
+  if (state.liveFrame) {
+    crops.push(`<img src="${state.liveFrame}" alt="captured frame" style="width:220px;max-width:100%;border-radius:8px;" />`);
+  }
+
+  if (faceCheck.person_detected !== undefined) {
+    const conf = faceCheck.person_confidence != null ? ` (${Math.round(faceCheck.person_confidence * 100)}% confidence)` : '';
+    detection = `
+      <ul style="list-style:none;padding:0;margin:0.25rem 0;">
+        <li style="margin:0.2rem 0;">${mark(!!faceCheck.person_detected)} &nbsp;Live face present in the captured frame${conf}</li>
+        <li style="margin:0.2rem 0;">${mark(!!faceCheck.id_card_photo_detected)} &nbsp;Photo detected on the held ID card</li>
+      </ul>`;
+    if (faceCheck.person_face_image_url) crops.push(thumb(faceCheck.person_face_image_url, 'Live face'));
+    if (faceCheck.id_card_face_image_url) crops.push(thumb(faceCheck.id_card_face_image_url, 'Photo on card'));
+  }
+
+  const step41 = `
+    ${detection}
+    ${crops.length ? `<div style="display:flex;gap:0.75rem;margin-top:0.5rem;flex-wrap:wrap;align-items:flex-end;">${crops.join('')}</div>` : ''}`;
+
+  card.innerHTML = `
+    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+      <span class="badge ${verdict.badge}" style="font-size:0.85rem;">${verdict.text}</span>
+      ${liveness ? `<span class="text-muted">${liveness.confidence}% of liveness signals passed</span>` : ''}
+    </div>
+    <h4 style="margin:0.75rem 0 0.25rem;font-size:0.95rem;">Step 4.1 — Person holding the ID card</h4>
+    ${step41}
+    <h4 style="margin:0.75rem 0 0.25rem;font-size:0.95rem;">Step 4.2 — Active liveness (${
+      (liveness && liveness.mode === 'audio') || state.livenessMode === 'audio'
+        ? 'audio guided: head turns + blinks'
+        : 'eye tracking + blink'
+    })</h4>
+    ${checks
+      ? `<ul style="list-style:none;padding:0;margin:0.25rem 0;">${checks}</ul>`
+      : '<p class="text-muted" style="margin:0.25rem 0;">Liveness checks did not run.</p>'}
+    ${liveness ? `<p class="text-muted" style="margin:0.5rem 0 0;font-size:0.8rem;">Tracker: ${liveness.tracker}${liveness.calibrated ? ' (calibrated)' : ' (uncalibrated)'}</p>` : ''}
+  `;
+
+  panel.classList.remove('hidden');
 }
 
 function renderEkycResults(documents) {
@@ -1020,6 +2148,9 @@ function renderEkycResults(documents) {
     const faceHtml = doc.face_image_url
       ? `<img src="${doc.face_image_url}" alt="face" style="width:96px;height:96px;object-fit:cover;border-radius:8px;margin-top:8px;" />`
       : '<div class="text-muted">No face crop</div>';
+    const procHtml = doc.processed_image_url
+      ? `<img src="${doc.processed_image_url}" alt="document" style="width:100%;max-height:160px;object-fit:contain;border-radius:8px;margin-top:8px;" />`
+      : '';
     return `
       <div class="glass-card" style="padding:1rem;">
         <div><span class="badge badge-info">${docType}</span>
@@ -1034,6 +2165,7 @@ function renderEkycResults(documents) {
         ${doc.error ? `<p style="margin:0.25rem 0;color:#ef4444;"><strong>Error:</strong> ${doc.error}</p>` : ''}
         ${(!fields.name && raw) ? `<p class="text-muted" style="margin:0.25rem 0;font-size:0.8rem;"><strong>OCR text:</strong> ${raw}</p>` : ''}
         ${faceHtml}
+        ${procHtml}
       </div>`;
   }).join('');
 
@@ -1048,54 +2180,126 @@ async function startPipelineAnimation() {
   if (pipelineRunning) return;
   pipelineRunning = true;
 
+  const timeline = document.getElementById('pipeline-timeline');
+  if (timeline) timeline.classList.remove('hidden');
   resetPipelineUI();
+  if (timeline) timeline.classList.remove('hidden');
+
   activateStage(1, 'done', 'Verification package submitted');
   logPipe(`[STEP 1] Application loaded for doctor ${state.activeDoctor.public_id}`);
-  logPipe('[STEP 2] Calling eKYC OCR microservice at http://127.0.0.1:5001 ...');
-  logPipe('[INFO] First OCR run can take 30-90s while models warm up. Please wait...');
+  logPipe(state.liveFrame
+    ? '[STEP 4.1] Live ID hold captured (camera frame stored).'
+    : '[STEP 4.1] Live ID hold step completed, but no camera frame was captured.');
+  if (state.livenessMode) {
+    logPipe(`[STEP 4.2] Mode chosen: ${state.livenessMode === 'audio' ? 'audio guided (accessible)' : 'eye tracking'}.`);
+  }
+  if (state.gazeSummary) {
+    const g = state.gazeSummary;
+    logPipe(
+      `[STEP 4.2] Eye tracking: ${g.gazePasses}/${g.total} gaze targets, ${g.headPasses}/${g.total} head-still checks (tracker: ${g.source}).`
+    );
+  }
+
+  // Show the liveness verdict straight away, then refresh it once the Step 4.1
+  // frame analysis (started while the user was doing the eye tracking) lands.
+  renderLivePersonCard();
+  if (state.livenessResult) {
+    logPipe(`[LIVENESS] Verdict: ${state.livenessResult.verdict} (${state.livenessResult.confidence}% of signals passed).`);
+    state.livenessResult.checks.forEach((c) => {
+      logPipe(`[LIVENESS] ${c.passed ? 'PASS' : 'FAIL'} ${c.label}${c.detail ? ` — ${c.detail}` : ''}`);
+    });
+  }
+  if (state.liveFaceCheck) {
+    Promise.race([state.liveFaceCheck, wait(25000)]).then(() => {
+      const r = state.liveIdResult || {};
+      if (r.person_detected !== undefined) {
+        logPipe(
+          `[STEP 4.1] Live face ${r.person_detected ? 'detected' : 'NOT detected'}; ID card photo ${r.id_card_photo_detected ? 'detected' : 'not detected'} (detector: ${r.detector || 'n/a'}).`
+        );
+      } else if (r.error) {
+        console.warn('Step 4.1 face detection unavailable:', r.error);
+      }
+      renderLivePersonCard();
+    });
+  }
+
+  logPipe('[STEP 2] Running eKYC evaluation on uploaded documents...');
   activateStage(2, 'running', 'Running OCR model on uploaded KYC documents...');
+
+  // Only evaluate what was uploaded in this session, otherwise documents left
+  // in the vault from earlier sessions show up in the results.
+  const sessionDocs = state.uploadedDocuments.filter((d) => d && d.document_id && !d.fromPreviousSession);
+  const sessionDocIds = sessionDocs.map((d) => d.document_id);
+  if (sessionDocIds.length) {
+    const types = [...new Set(sessionDocs.map((d) => d.document_type))].join(', ');
+    logPipe(`[SCOPE] Evaluating ${sessionDocIds.length} document(s) uploaded in this session: ${types}`);
+  } else {
+    logPipe('[SCOPE] No documents uploaded in this session — evaluating the existing vault contents.');
+  }
 
   try {
     const resp = await fetch(`${API_BASE}/api/v1/doctors/evaluate-ekyc`, {
       method: 'POST',
       headers: {
         'X-Doctor-Public-ID': state.activeDoctor.public_id,
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ document_ids: sessionDocIds }),
     });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || 'eKYC evaluation failed');
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const detail = data.error || data.detail || data.message || `HTTP ${resp.status}`;
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    }
 
-    logPipe(`[CONNECTED] Portal ⇄ OCR microservice responded OK`);
+    logPipe('[CONNECTED] eKYC evaluation responded OK');
     (data.stages || []).forEach((stage) => {
       activateStage(stage.id, stage.status, stage.detail);
       logPipe(`[STAGE ${stage.id}] ${stage.title}: ${stage.detail}`);
     });
 
-    renderEkycResults(data.documents || []);
+    const docs = Array.isArray(data.documents) ? data.documents.slice() : [];
+    if (state.liveIdResult && state.liveIdResult.parsed_fields) {
+      docs.unshift({
+        document_type: 'LIVE_ID_HOLD',
+        status: state.liveIdResult.status || 'success',
+        parsed_fields: state.liveIdResult.parsed_fields,
+        ocr_confidence: '-',
+        face_image_url: state.liveIdResult.holder_face_image_url || state.liveIdResult.face_image_url,
+        processed_image_url: state.liveIdResult.processed_image_url,
+        raw_text: state.liveIdResult.raw_text || [],
+      });
+    }
+    renderEkycResults(docs);
 
     const decision = (data.decision && data.decision.result) || data.status || 'UNKNOWN';
     const badge = document.getElementById('pipeline-status-badge');
-    badge.innerText = decision;
-    if (decision === 'AUTO_VERIFIED') {
-      badge.className = 'badge badge-success';
-    } else if (decision === 'MANUAL_REVIEW') {
-      badge.className = 'badge badge-warning';
-    } else {
-      badge.className = 'badge badge-danger';
+    if (badge) {
+      badge.innerText = decision;
+      if (decision === 'AUTO_VERIFIED') {
+        badge.className = 'badge badge-success';
+      } else if (decision === 'MANUAL_REVIEW') {
+        badge.className = 'badge badge-warning';
+      } else {
+        badge.className = 'badge badge-danger';
+      }
     }
 
     const conf = data.decision ? data.decision.ocr_confidence : '-';
     const nameScore = data.decision ? data.decision.name_match_score : '-';
-    document.getElementById('pipeline-decision-desc').innerText =
-      `Decision: ${decision} (OCR ${conf}%, Name Match ${nameScore}%)`;
+    const desc = document.getElementById('pipeline-decision-desc');
+    if (desc) {
+      desc.innerText = `Decision: ${decision} (OCR ${conf}%, Name Match ${nameScore}%)`;
+    }
 
     logPipe(`[DECISION] ${data.message || decision}`);
 
-    // Unlock Step 5 for AUTO_VERIFIED and MANUAL_REVIEW (demo continuity)
     if (decision === 'AUTO_VERIFIED' || decision === 'MANUAL_REVIEW') {
-      document.getElementById('btn-goto-prescription').classList.remove('hidden');
+      const btnRx = document.getElementById('btn-goto-prescription');
+      if (btnRx) btnRx.classList.remove('hidden');
       if (state.activeDoctor) {
-        document.getElementById('rx-doctor-id').value = state.activeDoctor.public_id;
+        const rx = document.getElementById('rx-doctor-id');
+        if (rx) rx.value = state.activeDoctor.public_id;
       }
       logPipe('[SUCCESS] Step 5 unlocked. You can continue to Digital Prescription Studio.');
     } else {
@@ -1105,12 +2309,17 @@ async function startPipelineAnimation() {
     activateStage(2, 'failed', err.message);
     activateStage(5, 'failed', `Evaluation error: ${err.message}`);
     const badge = document.getElementById('pipeline-status-badge');
-    badge.innerText = 'FAILED';
-    badge.className = 'badge badge-danger';
+    if (badge) {
+      badge.innerText = 'FAILED';
+      badge.className = 'badge badge-danger';
+    }
     logPipe(`[ERROR] ${err.message}`);
-    logPipe('[HINT] Make sure OCR service is running on http://127.0.0.1:5001');
+    if (state.liveIdResult) {
+      logPipe('[INFO] Showing Step 4.1 live capture results even though uploaded-doc OCR failed.');
+    }
   } finally {
     pipelineRunning = false;
+    if (timeline) timeline.classList.remove('hidden');
   }
 }
 

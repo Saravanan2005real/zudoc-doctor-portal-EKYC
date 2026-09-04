@@ -25,3 +25,7 @@ paddlepaddle
 ultralytics
 torch>=2.1
 mediapipe==0.10.14
+tensorflow
+tf-keras
+retina-face
+deepface

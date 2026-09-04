@@ -1,6 +1,6 @@
 # ZuDoc — Doctor Verification, eKYC & Eye Tracking
 
-Enterprise-style **doctor identity verification (eKYC)** for healthcare platforms, plus a standalone **FGI-Net eye-tracking** module for gaze direction and per-eye (x, y) plots.
+Enterprise-style **doctor identity verification (eKYC)** for healthcare platforms, with **browser liveness** (WebGazer eye tracking or audio-guided checks for accessibility) and an optional standalone **FGI-Net** eye-tracking module.
 
 **Repository:** [github.com/Saravanan2005real/zudoc-doctor-portal-EKYC](https://github.com/Saravanan2005real/zudoc-doctor-portal-EKYC)
 
@@ -11,10 +11,10 @@ Enterprise-style **doctor identity verification (eKYC)** for healthcare platform
 | Goal | How it is achieved |
 |------|--------------------|
 | Trust doctors before clinical actions | Multi-step wizard + OCR of Aadhaar/PAN + face presence + name cross-match |
-| Keep identity checks automated | Flask OCR microservice (PaddleOCR + RetinaFace + OCR-safe enhancement) |
+| Keep identity checks automated | **In-process OCR** (PaddleOCR + RetinaFace) inside the FastAPI app — no separate `:5001` process required |
+| Prove a live person is present | Step 4.1 ID-hold capture + Step 4.2 dual-mode liveness (eye tracking **or** audio guided) |
 | Persist audit trail | PostgreSQL via SQLAlchemy + verification history |
-| Track live gaze / liveness signal | FGI-Net + MediaPipe iris → top / bottom / left / right / center + (x,y) graph |
-| Demo the full loop locally | FastAPI serves API **and** portal UI; eye tracking runs as a webcam demo |
+| Demo the full loop locally | One command: `python main.py` → portal + API + OCR on **:8080** |
 
 ---
 
@@ -25,8 +25,9 @@ Enterprise-style **doctor identity verification (eKYC)** for healthcare platform
 | Portal UI | Vanilla HTML / CSS / JS (`python_backend/public/`) |
 | Backend API | **FastAPI** + Uvicorn + Pydantic (`python_backend/`) |
 | ORM / DB | SQLAlchemy 2 + **PostgreSQL** |
-| OCR microservice | **Flask** + PaddleOCR + RetinaFace + OpenCV (`ocr_service/`) |
-| Eye tracking | **FGI-Net** (PyTorch) + MediaPipe Face Mesh + OpenCV (`eye tracking/`) |
+| OCR / faces | **In-process** PaddleOCR + RetinaFace + OpenCV (`python_backend/ocr/`) |
+| Liveness (sighted) | **WebGazer.js** + MediaPipe Face Mesh (browser) |
+| Liveness (accessible) | Speech synthesis + MediaPipe head-turn / blink checks |
 | Auth | Password hash + SMS OTP (mock prints to console) + JWT / refresh tokens |
 | Deploy | Docker Compose, Nginx, Kubernetes manifests |
 
@@ -36,67 +37,58 @@ Enterprise-style **doctor identity verification (eKYC)** for healthcare platform
 
 ## System architecture (full platform)
 
-Three product surfaces share one repo: the **doctor portal**, the **OCR microservice**, and the **eye-tracking module**.
+One FastAPI process serves the **portal UI**, **REST API**, and **OCR / live-face** routes. Browser liveness (WebGazer or audio) runs client-side against the webcam.
 
 ```mermaid
 flowchart TB
-  subgraph Client["Browser / Webcam"]
-    UI["MedTrust Portal<br/>python_backend/public/ — Steps 1–5"]
-    CAM["Webcam<br/>eye tracking demo"]
+  subgraph Client["Browser + Webcam"]
+    UI["Doctor Portal<br/>Steps 1–5 · public/"]
+    WG["Step 4.2 Eye tracking<br/>WebGazer + Face Mesh"]
+    AUD["Step 4.2 Audio guided<br/>speech + head / blink"]
+    CAM["Webcam"]
   end
 
   subgraph Edge["Optional edge (Compose)"]
     NGX["Nginx :80"]
   end
 
-  subgraph Backend["python_backend — FastAPI"]
-    API["HTTP API<br/>:8000 local / :8080 Docker"]
+  subgraph Backend["python_backend — single process :8080"]
+    API["FastAPI / Uvicorn"]
     SVC["Services<br/>auth · documents · evaluate-ekyc · submit"]
+    OCR["In-process OCR<br/>ocr/engine · ocr/inproc"]
+    LIVE["Live face check<br/>POST /api/v1/live_face_check"]
     REPO["SQLAlchemy repositories"]
-    STORE["Local file storage<br/>uploads/"]
-  end
-
-  subgraph OCR["ocr_service — Flask :5001"]
-    OCRAPI["POST /api/v1/ocr"]
-    PIPE["Quality → Warp → Mild enhance<br/>→ RetinaFace → PaddleOCR → Parse"]
-  end
-
-  subgraph EyeMod["eye tracking/ — FGI-Net module"]
-    DEMO["demo.py"]
-    ENG["FaceEyeEngine<br/>MediaPipe iris + facing gate"]
-    FGI["FGI-Net gaze head"]
-    PLOT["(x,y) graph L/R pupils"]
+    STORE["uploads/ + ocr_uploads/"]
   end
 
   PG[("PostgreSQL")]
 
   UI -->|HTTP| NGX
   NGX --> API
-  UI -->|direct local| API
+  UI -->|local direct| API
+  CAM --> UI
+  UI --> WG
+  UI --> AUD
+  UI -->|"Step 4.1 frame"| LIVE
   API --> SVC
   SVC --> REPO --> PG
   SVC --> STORE
-  SVC -->|"KYC images"| OCRAPI
-  OCRAPI --> PIPE
-
-  CAM --> DEMO
-  DEMO --> ENG
-  DEMO --> FGI
-  ENG --> PLOT
-  DEMO --> PLOT
+  SVC -->|"evaluate-ekyc"| OCR
+  LIVE --> OCR
+  API --> OCR
 ```
 
 ### Component map
 
 | Component | Path | Port / entry | Responsibility |
 |-----------|------|--------------|----------------|
-| Portal + API | `python_backend/` | **:8000** / **:8080** | Auth, wizard APIs, documents, **evaluate-ekyc**, prescriptions |
-| OCR microservice | `ocr_service/app.py` | **:5001** | Aadhaar/PAN OCR, face crop, Verhoeff/format checks |
-| Eye tracking | `eye tracking/demo.py` | Webcam process | Both-eyes facing gate, pupil (x,y), direction label |
+| Portal + API + OCR | `python_backend/` | **:8080** (`python main.py`) | Auth, wizard, documents, **evaluate-ekyc**, live face, prescriptions, static UI |
+| OCR engine | `python_backend/ocr/` | same process | Aadhaar/PAN OCR, RetinaFace crop, Verhoeff/format checks |
+| Browser liveness | `python_backend/public/app.js` | browser | WebGazer eye tracking **or** audio-guided checks |
 | Database | PostgreSQL | **:5433** local / **:5432** Compose | Doctors, docs, OTP, history |
 | Nginx | `nginx.conf` | **:80** | Reverse proxy (Compose) |
 
-See also: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`DESIGN.md`](DESIGN.md), [`eye tracking/README.md`](eye%20tracking/README.md).
+See also: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`DESIGN.md`](DESIGN.md).
 
 ---
 
@@ -106,9 +98,14 @@ See also: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`DESIGN.md`](DESIGN.m
 flowchart LR
   S1["Step 1<br/>Register / OTP / Login"] --> S2["Step 2<br/>License · Qualification · Clinic"]
   S2 --> S3["Step 3<br/>Upload documents<br/>+ Submit package"]
-  S3 --> S4["Step 4<br/>evaluate-ekyc<br/>OCR + decision"]
-  S4 -->|AUTO_VERIFIED or MANUAL_REVIEW| S5["Step 5<br/>Prescription studio"]
-  S4 -->|FAILED| X["Blocked — fix docs / re-run"]
+  S3 --> S41["Step 4.1<br/>Live ID hold"]
+  S41 --> S42{"Step 4.2<br/>Choose mode"}
+  S42 -->|Eye tracking| EYE["WebGazer + blink"]
+  S42 -->|Audio guided| AUD["Head turns + blinks"]
+  EYE --> EVAL["evaluate-ekyc<br/>OCR + decision"]
+  AUD --> EVAL
+  EVAL -->|AUTO_VERIFIED or MANUAL_REVIEW| S5["Step 5<br/>Prescription studio"]
+  EVAL -->|FAILED| X["Blocked — fix docs / re-run"]
 ```
 
 ### Step 1 — Registration & auth
@@ -137,22 +134,23 @@ Wizard identity for later steps is primarily **`X-Doctor-Public-ID`**.
 3. Submit → `POST /api/v1/doctors/submit-verification` → `PENDING`
 4. UI advances to Step 4
 
-### Step 4 — eKYC evaluation & Live Verification
+### Step 4 — Live person check + eKYC evaluation
 
-Step 4 consists of two parts:
-- **Step 4.1**: Uses dual-mode liveness verification. 
-  - **Standard (Eye Tracking)**: WebGazer + MediaPipe.
-  - **Accessibility (Audio/Voice)**: Audio-guided verification for visually impaired users.
-- **Step 4.2**: OCR Evaluation.
-`POST /api/v1/doctors/evaluate-ekyc` → `python_backend/services/ekyc_evaluation_service.py`
+Step 4 has three phases:
+
+| Phase | What happens |
+|-------|----------------|
+| **4.1 Live ID hold** | Webcam capture while holding Aadhaar/PAN; frame stored client-side; optional `POST /api/v1/live_face_check` (RetinaFace) |
+| **4.2 Human verification** | User picks **Eye tracking** (WebGazer calibration + gaze targets + blink) **or** **Audio guided** (spoken prompts, head turns + blinks for blind / low-vision users) |
+| **OCR evaluation** | `POST /api/v1/doctors/evaluate-ekyc` with **session document IDs** → in-process PaddleOCR + RetinaFace → decision |
 
 ```mermaid
 flowchart TD
   A(["evaluate-ekyc"]) --> B[Load doctor]
-  B --> C{OCR healthy?}
+  B --> C{OCR engine ready?}
   C -->|no| MR1[MANUAL_REVIEW]
-  C -->|yes| D[Prefer AADHAAR/PAN/PASSPORT]
-  D --> E["POST :5001/api/v1/ocr per doc"]
+  C -->|yes| D[Scope to session document_ids<br/>else latest vault KYC docs]
+  D --> E["In-process OCR per doc<br/>PaddleOCR + RetinaFace"]
   E --> F{OCR success?}
   F -->|no| MR2[MANUAL_REVIEW / FAILED]
   F -->|yes| G[ID format + face presence]
@@ -166,9 +164,9 @@ flowchart TD
 | Stage | Meaning |
 |-------|---------|
 | 1 Application Submitted | Package loaded |
-| 2 OCR + Face Extraction | Call OCR microservice |
+| 2 OCR + Face Extraction | In-process OCR on scoped documents |
 | 3 ID & Face Check | Verhoeff / PAN format + face crop present |
-| 4 Name Cross-Match | OCR name vs profile (Jaccard %) |
+| 4 Name Cross-Match | OCR name vs profile (token + initial aware) |
 | 5 Final Decision | `AUTO_VERIFIED` / `MANUAL_REVIEW` / `FAILED` |
 
 **Decision summary**
@@ -177,20 +175,24 @@ flowchart TD
 - **MANUAL_REVIEW** — OCR down / weak signals / soft mismatches
 - **FAILED** — no documents (status → `REJECTED`)
 
+UI also shows a **Live Person Verification** card (Step 4.1 frame + Step 4.2 pass/fail signals) above the OCR result cards.
+
 ### Step 5 — Prescription studio
 
 Unlocked in UI when Step 4 is not `FAILED` → `POST /api/v1/prescriptions`.
 
 ---
 
-## OCR microservice pipeline (`:5001`)
+## OCR pipeline (in-process on `:8080`)
+
+OCR runs inside the FastAPI process via `ocr/inproc.py` (Flask test-client against `ocr/engine.py`). A standalone `:5001` process is optional only.
 
 ```mermaid
 flowchart TD
-  U([Upload]) --> Q[Quality check]
+  U([Upload / evaluate-ekyc]) --> Q[Quality check]
   Q --> W[Detect + perspective warp]
   W --> E["OCR-safe enhance<br/>mild CLAHE · SR only if soft/small"]
-  E --> FACE[RetinaFace face crop]
+  E --> FACE[RetinaFace face crop<br/>TF_USE_LEGACY_KERAS=1]
   E --> PASS["Dual OCR pass<br/>mild vs raw → best parse"]
   PASS --> ROI["Aadhaar UID ROI refine<br/>bottom band digits"]
   ROI --> P[Parse Aadhaar / PAN]
@@ -334,27 +336,19 @@ eKYC/
 | `DB_PASSWORD` | `dinesh_2006` |
 | `DB_NAME` | `doctor_verification_db` |
 
-### 2. OCR
-
-```bash
-cd ocr_service
-pip install -r requirements.txt
-python app.py
-```
-
-→ `http://127.0.0.1:5001`
-
-### 3. Portal
+### 2. Portal (API + UI + OCR — one process)
 
 ```bash
 cd python_backend
+python -m venv .venv
+# Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m uvicorn main:app --host 127.0.0.1 --port 8000
+python main.py
 ```
 
-→ `http://127.0.0.1:8000` — OTP prints in the backend terminal.
+→ `http://127.0.0.1:8080` — OTP prints in the backend terminal. OCR and live-face routes run in the same process.
 
-Keep **both** OCR and FastAPI running for Step 4.
+Optional: start a standalone OCR Flask process only if you need the legacy `:5001` UI (`OCR_STANDALONE=1 python -m ocr.engine`).
 
 ---
 
@@ -366,9 +360,8 @@ docker compose up --build
 
 | Service | URL / port |
 |---------|------------|
-| Portal / API | http://localhost:8080 |
+| Portal / API / OCR | http://localhost:8080 |
 | Nginx | http://localhost:80 |
-| OCR | http://localhost:5001 |
 | Postgres | localhost:5432 |
 
 ---
@@ -382,6 +375,7 @@ docker compose up --build
 | Documents | `POST/GET/DELETE /api/v1/doctors/documents` |
 | Submit | `POST /api/v1/doctors/submit-verification` |
 | **eKYC** | `POST /api/v1/doctors/evaluate-ekyc` |
+| Live face | `POST /api/v1/live_face_check` · `/api/v1/live_verify` · `/api/v1/ocr` |
 | Prescriptions | `POST /api/v1/prescriptions` |
 | Health | `GET /health/live` · `/health/ready` · `/metrics` |
 
@@ -393,15 +387,15 @@ docker compose up --build
 |----------|---------|
 | `JWT_SECRET` | Access token signing |
 | `DB_*` | PostgreSQL |
-| `PORT` | Backend listen port |
-| `OCR_SERVICE_URL` | Default `http://127.0.0.1:5001/api/v1/ocr` |
+| `PORT` | Backend listen port (default `8080`) |
+| `TF_USE_LEGACY_KERAS` | Set to `1` for RetinaFace on TF 2.21 (set automatically in `main.py`) |
 
 ---
 
 ## Further reading
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Mermaid system / sequence / deploy views
-- [`eye tracking/README.md`](eye%20tracking/README.md) — eye module quick start
+- [`eye tracking/README.md`](eye%20tracking/README.md) — optional FGI-Net module
 - [`DESIGN.md`](DESIGN.md) — design goals & extensibility
 - [`docs/openapi.yaml`](docs/openapi.yaml) — API contract
 

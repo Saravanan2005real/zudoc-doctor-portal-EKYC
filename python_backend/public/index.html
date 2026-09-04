@@ -408,68 +408,99 @@
             <div>
               <span class="badge badge-info">Step 4 of 5</span>
               <h2>⚡ eKYC Evaluation Pipeline</h2>
-              <p class="subtitle">Live PaddleOCR + RetinaFace evaluation on uploaded Aadhaar/PAN documents, then final decision.</p>
+              <p class="subtitle">Hold your ID, then choose an eye-tracking or audio guided liveness check.</p>
             </div>
             <span class="badge badge-warning" id="pipeline-status-badge">QUEUED</span>
           </div>
 
-          <!-- Liveness Check Section -->
-          <div class="liveness-section mt-4" id="liveness-section">
-            <h3>👁️ Step 4.1: Human Verification</h3>
-            <p class="subtitle text-center">Select your preferred verification method below.</p>
-            
-            <div class="flex-between mb-3" style="gap: 10px; justify-content: center;">
-              <button class="btn btn-outline" id="btn-mode-standard" onclick="selectVerificationMode('standard')">Standard (Eye Tracking)</button>
-              <button class="btn btn-outline" id="btn-mode-accessibility" onclick="selectVerificationMode('accessibility')">Accessibility (Audio/Voice)</button>
+          <div class="liveness-section mt-4" id="live-id-section">
+            <h3>🪪 Step 4.1: Live ID Hold</h3>
+            <p class="subtitle text-center">Hold your Aadhaar or PAN next to your face, then capture.</p>
+            <div class="live-id-simple">
+              <div class="live-id-video-wrap" id="live-id-video-card">
+                <video id="live-id-webcam" autoplay playsinline></video>
+                <div id="live-id-tick" class="live-id-tick hidden">
+                  <div class="tick-circle">✓</div>
+                  <div class="tick-label">ID hold captured</div>
+                </div>
+              </div>
+              <button class="btn btn-primary btn-lg mt-2" id="btn-capture-live-id" type="button" style="width:100%; max-width: 560px;">Capture</button>
+              <canvas id="live-id-canvas" class="hidden"></canvas>
             </div>
+          </div>
 
-            <!-- Standard Eye Tracking UI -->
-            <div id="liveness-standard-ui" class="hidden text-center" style="position: relative;">
-               <!-- Webgazer elements will be injected/shown here -->
-               <div id="webgazer-container" style="position: relative; width: 480px; height: 360px; margin: 0 auto; background: #111; border-radius: 8px; overflow: hidden; border: 2px solid var(--border-color);">
-                  <!-- The video will be mounted by WebGazer -->
+          <!-- Step 4.2: choose how to prove you are a live person -->
+          <div class="liveness-section mt-4 hidden" id="liveness-mode-choice">
+            <h3>👤 Step 4.2: Human Verification</h3>
+            <p class="subtitle text-center">Choose the check that suits you. Both prove a live person is present.</p>
+            <div class="mode-choice-grid">
+              <button class="mode-choice-card" type="button" id="btn-mode-eye" onclick="chooseLivenessMode('eye')">
+                <span class="mode-choice-icon" aria-hidden="true">👁️</span>
+                <span class="mode-choice-title">Eye tracking check</span>
+                <span class="mode-choice-desc">Follow dots on screen with your eyes, then blink. Needs to see the screen.</span>
+                <span class="mode-choice-meta">Recommended · about 1 minute · press 1</span>
+              </button>
+              <button class="mode-choice-card" type="button" id="btn-mode-audio" onclick="chooseLivenessMode('audio')">
+                <span class="mode-choice-icon" aria-hidden="true">🔊</span>
+                <span class="mode-choice-title">Audio guided check</span>
+                <span class="mode-choice-desc">Spoken instructions only — turn your head and blink. For blind and low vision users.</span>
+                <span class="mode-choice-meta">No screen needed · about 40 seconds · press 2</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Step 4.2: Liveness (WebGazer) — overlays only; no empty camera box -->
+          <div class="liveness-section mt-4 hidden" id="liveness-section">
+            <div id="liveness-standard-ui" class="text-center">
+               <div id="webgazer-container" class="hidden"></div>
+               <div id="liveness-progress" class="hidden"></div>
+               <div id="liveness-status" class="hidden">Starting eye tracking…</div>
+               <div id="liveness-overlay" class="hidden">
+                  <button class="btn btn-primary btn-lg" id="btn-start-liveness" type="button">Start</button>
                </div>
                
-               <div class="progress mt-2" style="height:8px; background:rgba(255,255,255,0.12); border-radius:999px; overflow:hidden; width: 480px; margin: 0 auto;">
-                  <div id="liveness-progress" style="height:100%; width:0%; background:#22c55e; transition:width 0.2s;"></div>
+               <div id="wg-boot-overlay" class="ekyc-fs-overlay hidden">
+                  <h2>Starting eye tracking…</h2>
+                  <p>Keep your face toward the screen. The camera stays hidden.</p>
+                  <div id="wgBootStatus">Loading tracker…</div>
                </div>
-               
-               <div class="alert alert-info mt-2 text-center" id="liveness-status" style="width: 480px; margin: 0 auto;">Status: Click Start below...</div>
-               
-               <div id="liveness-overlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); border-radius: 8px;">
-                  <button class="btn btn-primary btn-lg" id="btn-start-liveness" type="button">Start WebGazer Eye Tracking</button>
-               </div>
-               
+
                <!-- Custom overlays for calibration, random dots, and blink -->
-               <div id="calOverlay" class="hidden" style="position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:9999;">
-                  <div style="color:white; text-align:center; padding-top: 20px;">
-                     <h2>Calibrate WebGazer</h2>
-                     <p>Click each dot 3 times while looking at it.</p>
+               <div id="calOverlay" class="hidden">
+                  <div id="calHud">
+                     <h2>Look at each dot</h2>
+                     <p>Hover the cursor on the dot for 2 seconds while looking at it.</p>
                      <div id="calProgress">0 / 9 dots</div>
+                     <div id="calFaceState" class="cal-face-ok">Face detected</div>
                   </div>
-                  <div id="calLayer" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
+                  <div id="calLayer"></div>
                </div>
 
-               <div id="challengeOverlay" class="hidden" style="position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:9999;">
-                  <div style="color:white; text-align:center; padding-top: 20px;">
+               <div id="challengeOverlay" class="ekyc-fs-overlay hidden">
+                  <div class="ekyc-fs-hud">
                      <h2 id="challengeTitle">Challenge 1</h2>
-                     <p id="challengeHint">Look at the dot</p>
+                     <p id="challengeHint">Look at the orange dot. Keep your head still.</p>
                      <div id="challengeProgress"></div>
                   </div>
-                  <div id="challengeDot" style="position:absolute; width:20px; height:20px; background:orange; border-radius:50%; transform:translate(-50%, -50%);"></div>
-                  <div id="gazeReticle" class="hidden" style="position:absolute; width:40px; height:40px; border:2px solid cyan; border-radius:50%; transform:translate(-50%, -50%); pointer-events:none;"></div>
+                  <div id="challengeDot"></div>
+                  <div id="gazeReticle" class="hidden"></div>
                </div>
 
-               <div id="blinkOverlay" class="hidden" style="position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:white;">
+               <div id="blinkOverlay" class="ekyc-fs-overlay hidden">
                   <h2 id="blinkTitle">Get Ready...</h2>
-                  <p id="blinkHint">Keep your face centered.</p>
-                  <div id="blinkRing" style="width:100px; height:100px; border:4px solid white; border-radius:50%; margin-top:20px;"></div>
+                  <p id="blinkHint">Look at the circle and blink once when asked. The camera stays hidden.</p>
+                  <div id="blinkRing"></div>
                </div>
             </div>
 
             <!-- Accessibility Audio UI -->
             <div id="liveness-accessibility-ui" class="hidden text-center">
-              <iframe src="disability/index.html" style="width: 100%; height: 500px; border: 2px solid var(--border-color); border-radius: 8px; background: #fff;" allow="camera; microphone"></iframe>
+              <div id="audioOverlay" class="ekyc-fs-overlay hidden" role="dialog" aria-label="Audio guided liveness check">
+                <h2 id="audioTitle">Audio verification</h2>
+                <p id="audioInstruction" class="audio-instruction">Listen to the spoken instructions.</p>
+                <div id="audioStatus" class="audio-status" aria-live="assertive" role="status">Preparing…</div>
+                <div id="audioStepDots" class="audio-step-dots" aria-hidden="true"></div>
+              </div>
             </div>
 
           </div>
@@ -512,6 +543,11 @@
             </div>
           </div>
 
+          <div id="live-person-panel" class="mt-4 hidden">
+            <h3 style="margin-bottom: 0.75rem;">Live Person Verification (Step 4.1 + 4.2)</h3>
+            <div id="live-person-card" class="glass-card" style="padding:1rem;"></div>
+          </div>
+
           <div id="ekyc-result-panel" class="mt-4 hidden">
             <h3 style="margin-bottom: 0.75rem;">eKYC Extracted Results</h3>
             <div id="ekyc-result-cards" class="grid-2"></div>
@@ -525,7 +561,7 @@
             <button class="btn btn-outline" onclick="goToStep(3)">⬅ Back to Step 3</button>
             <div style="display:flex; gap:0.75rem; align-items:center;">
               <button class="btn btn-outline" id="btn-retry-ekyc" onclick="beginStep4Liveness()">
-                🔄 Re-run Liveness + eKYC
+                🔄 Re-run Step 4.1 + eKYC
               </button>
               <button class="btn btn-success btn-lg hidden" id="btn-goto-prescription" onclick="goToStep(5)">
                 Unlock & Open Digital Prescription Studio (Step 5) ➔

@@ -1,6 +1,6 @@
-# Architecture — ZuDoc Doctor eKYC Portal + Eye Tracking
+# Architecture — ZuDoc Doctor eKYC Portal + Live Liveness
 
-This document is the **source of truth** for system diagrams. It matches the **Python** runtime: FastAPI portal backend + Flask OCR microservice + PostgreSQL + FGI-Net eye-tracking module.
+This document is the **source of truth** for system diagrams. It matches the **Python** runtime: a single FastAPI process (portal UI + API + in-process OCR) + PostgreSQL + browser liveness (WebGazer or audio guided).
 
 > Diagrams use [Mermaid](https://mermaid.js.org/) and render on GitHub.
 
@@ -14,11 +14,12 @@ For a shorter overview and setup guide, see the root [`README.md`](../README.md)
 flowchart LR
   Doctor[Doctor]
   Admin[Admin Reviewer]
-  Portal[MedTrust Web Portal<br/>public/]
-  API[FastAPI<br/>python_backend]
+  Portal[Doctor Web Portal<br/>public/]
+  API[FastAPI<br/>python_backend :8080]
   PG[(PostgreSQL)]
-  OCR[Flask OCR Microservice<br/>ocr_service :5001]
-  Eye[Eye Tracking Module<br/>eye tracking/ FGI-Net]
+  OCR[In-process OCR<br/>ocr/engine]
+  Live[Live face check<br/>/api/v1/live_face_check]
+  Eye[Browser liveness<br/>WebGazer or Audio]
   Cam[Webcam]
   SMS[SMS Provider<br/>Mock / MSG91 / Twilio]
   Store[Object Storage<br/>Local / S3 / Cloudinary]
@@ -26,28 +27,26 @@ flowchart LR
   Doctor --> Portal
   Admin --> Portal
   Portal --> API
+  Cam --> Portal
+  Portal --> Eye
+  Portal --> Live
   API --> PG
-  API -->|POST /api/v1/ocr| OCR
+  API --> OCR
+  Live --> OCR
   API --> SMS
   API --> Store
-  Cam --> Eye
 ```
 
 **What is real today for the doctor wizard**
 
 - Auth, credentials, documents, submit, **synchronous `evaluate-ekyc`**, UI Step 5
-- OCR microservice for Aadhaar/PAN parse + RetinaFace face crop (OCR-safe enhance + UID ROI)
-
-**Eye tracking (standalone demo today)**
-
-- MediaPipe iris + both-eyes facing gate + (x,y) plot + direction classifier
-- FGI-Net loaded for optional pitch/yaw refine when real weights are present
+- In-process OCR for Aadhaar/PAN parse + RetinaFace face crop
+- Step 4.1 live ID-hold capture + Step 4.2 dual-mode liveness (eye tracking **or** audio guided)
 
 **Designed / partial**
 
 - Async `VerificationJob` worker (council → fraud → decision)
 - Full admin review service wiring (UI exists; many admin routes are stubs)
-- Wiring eye-tracking signals into portal Step 4 / liveness
 - Redis / RabbitMQ in Compose for a production-shaped topology
 
 ---
@@ -57,25 +56,23 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph Browser
-    UI[public/ MedTrust UI]
+    UI[public/ Doctor UI]
+    WG[WebGazer + Face Mesh]
+    AUD[Audio guided liveness]
   end
 
   subgraph ComposeEdge["Compose only"]
     NGX[Nginx :80]
   end
 
-  subgraph FastAPI["python_backend"]
-    HTTP[Uvicorn / FastAPI<br/>:8000 local · :8080 Docker]
+  subgraph FastAPI["python_backend — one process"]
+    HTTP[Uvicorn / FastAPI<br/>:8080]
     CTRL[Controllers]
     SVC[Services]
     REPO[Repositories]
-    UP[uploads/]
-  end
-
-  subgraph FlaskOCR["ocr_service"]
-    OHTTP[Flask :5001]
-    OPIPE[Quality · Warp · SR · Face · OCR · Parse]
-    OU[ocr_uploads/]
+    INPROC[ocr/inproc]
+    ENG[ocr/engine<br/>PaddleOCR · RetinaFace]
+    UP[uploads/ + ocr_uploads/]
   end
 
   DB[(PostgreSQL)]
@@ -83,17 +80,18 @@ flowchart TB
   UI --> NGX
   NGX --> HTTP
   UI -->|local direct| HTTP
+  UI --> WG
+  UI --> AUD
   HTTP --> CTRL --> SVC
   SVC --> REPO --> DB
   SVC --> UP
-  SVC --> OHTTP
-  OHTTP --> OPIPE --> OU
+  SVC --> INPROC --> ENG
+  CTRL -->|/api/v1/ocr · live_face_check| INPROC
 ```
 
 | Process | Default local | Compose |
 |---------|---------------|---------|
-| Portal + API | `127.0.0.1:8000` | `:8080` (+ Nginx `:80`) |
-| OCR | `127.0.0.1:5001` | `:5001` |
+| Portal + API + OCR | `127.0.0.1:8080` | `:8080` (+ Nginx `:80`) |
 | Postgres | `:5433` (common local) | `:5432` |
 
 Health:

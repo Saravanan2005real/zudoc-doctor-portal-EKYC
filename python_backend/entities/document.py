@@ -37,8 +37,10 @@ class DoctorDocument(Base):
     version = Column(Integer, default=1, nullable=False)
     is_latest = Column(Boolean, default=True, nullable=False)
     ocr_status = Column(Enum(OCRStatus, name="ocr_status_enum", native_enum=False), default=OCRStatus.PENDING, nullable=False)
-    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Client-side defaults too: the table predates these server defaults, so
+    # existing databases were inserting NULL timestamps.
+    uploaded_at = Column(DateTime(timezone=True), default=func.now(), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), server_default=func.now(), onupdate=func.now())
     deleted_at = Column(DateTime(timezone=True), index=True, nullable=True)
 
     # Relations

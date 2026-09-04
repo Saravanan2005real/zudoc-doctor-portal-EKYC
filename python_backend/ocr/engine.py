@@ -44,8 +44,11 @@ _TORCH_MOCK_FINDER = sys.meta_path[0]
 
 # Disable oneDNN/MKLDNN to prevent the PIR implementation bug on CPU
 os.environ['FLAGS_use_mkldnn'] = '0'
-# Do NOT set TF_USE_LEGACY_KERAS=1 here — it breaks `import tensorflow.keras`
-# which RetinaFace requires on TF 2.15 + standalone keras.
+# RetinaFace builds its model with the Keras 2 functional API. On TF 2.21 the
+# default `tf.keras` is Keras 3, which rejects it with "A KerasTensor cannot be
+# used as input to a TensorFlow function" and silently kills all face
+# extraction. Pinning tf.keras to the tf_keras (Keras 2) shim fixes detection.
+os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')
 # Suppress TensorFlow C++ logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -2765,7 +2768,8 @@ def live_verify_api():
         
     try:
         # Decode base64 image
-        image_data = data['image'].split(',')[1]
+        raw_image = data['image']
+        image_data = raw_image.split(',', 1)[1] if ',' in raw_image else raw_image
         img_bytes = base64.b64decode(image_data)
         np_arr = np.frombuffer(img_bytes, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -2775,8 +2779,7 @@ def live_verify_api():
 
         filename_id = str(uuid.uuid4())
 
-        # Step 4.1 — live ID-card hold verification (OCR only; no RetinaFace).
-        # Perspective/contour crop when possible, then PaddleOCR on the card region.
+        # Step 4.1 — live person holding ID: warp card → PaddleOCR → live/id faces → ArcFace.
         doc_img, warped_ok = detect_and_warp_document(img)
 
         best_img, extracted_lines, _scores, _avg, parsed_fields, _label = best_ocr_pass(
@@ -2787,6 +2790,33 @@ def live_verify_api():
         doc_path = os.path.join(app.config['UPLOAD_FOLDER'], doc_filename)
         if not _save_jpg(doc_path, best_img):
             return jsonify({"status": "failed", "error": "Failed to save processed live document image"}), 500
+
+        id_face, id_meta, holder_face, holder_meta = extract_holder_and_id_card_faces(
+            img, best_img, warped_ok
+        )
+
+        holder_filename = None
+        if holder_face is not None:
+            holder_filename = f"live_holder_{filename_id}.jpg"
+            holder_path = os.path.join(app.config['UPLOAD_FOLDER'], holder_filename)
+            if not _save_jpg(holder_path, holder_face):
+                holder_filename = None
+
+        id_filename = None
+        if id_face is not None:
+            id_filename = f"live_idface_{filename_id}.jpg"
+            id_path = os.path.join(app.config['UPLOAD_FOLDER'], id_filename)
+            if not _save_jpg(id_path, id_face):
+                id_filename = None
+
+        refs = _collect_reference_faces(data)
+        match_info = _cross_verify_uploaded_vs_live(refs, holder_filename, id_filename)
+        live_vs_id = None
+        if holder_filename and id_filename:
+            live_vs_id = _verify_face_pair(
+                _resolve_upload_face_path(holder_filename),
+                _resolve_upload_face_path(id_filename),
+            )
 
         from ocr.quality import assess_live_frame, ocr_fields_usable
         quality = assess_live_frame(img)
@@ -2800,7 +2830,6 @@ def live_verify_api():
                 missing.append("blurry")
             if not quality.get("lighting_ok"):
                 missing.append("lighting")
-        # Deduplicate while preserving order
         seen = set()
         missing = [m for m in missing if not (m in seen or seen.add(m))]
         step41_complete = len(missing) == 0
@@ -2811,28 +2840,87 @@ def live_verify_api():
             "step41_missing": missing,
             "quality": quality,
             "document_detected": bool(warped_ok),
-            "face_image_url": None,
-            "id_card_face_image_url": None,
-            "holder_face_image_url": None,
-            "face_source": "disabled_no_retinaface",
-            "face_debug": {"source": "disabled_no_retinaface"},
-            "holder_face_debug": {"source": "disabled_no_retinaface"},
+            "face_image_url": f"/ocr_uploads/{holder_filename}" if holder_filename else None,
+            "id_card_face_image_url": f"/ocr_uploads/{id_filename}" if id_filename else None,
+            "holder_face_image_url": f"/ocr_uploads/{holder_filename}" if holder_filename else None,
+            "face_source": holder_meta.get("source"),
+            "face_debug": id_meta,
+            "holder_face_debug": holder_meta,
             "processed_image_url": f"/ocr_uploads/{doc_filename}",
             "parsed_fields": parsed_fields,
             "raw_text": extracted_lines,
-            "face_match": None,
-            "face_match_vs_holder": None,
-            "face_match_vs_id_card": None,
-            "face_match_live_vs_id": None,
-            "face_match_details": [],
-            "step3_face_matches": [],
-            "reference_faces_used": [],
+            "face_match": match_info.get("face_match"),
+            "face_match_vs_holder": match_info.get("face_match_vs_holder"),
+            "face_match_vs_id_card": match_info.get("face_match_vs_id_card"),
+            "face_match_live_vs_id": live_vs_id,
+            "face_match_details": match_info.get("face_match_details") or [],
+            "step3_face_matches": match_info.get("step3_face_matches") or [],
+            "reference_faces_used": [r.get("filename") for r in refs],
         }))
         
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"status": "failed", "error": str(e)}), 500
+
+@app.route('/api/v1/live_face_check', methods=['POST'])
+def live_face_check_api():
+    """Step 4.1 lightweight check: is a real person in front of the camera, and
+    are they holding an ID card with a printed photo?
+
+    Deliberately skips OCR and face matching so the portal can stay responsive:
+    it only runs face detection on the captured frame.
+    """
+    data = request.json
+    if not data or 'image' not in data:
+        return jsonify({"error": "No image data provided"}), 400
+
+    try:
+        raw_image = data['image']
+        image_data = raw_image.split(',', 1)[1] if ',' in raw_image else raw_image
+        img_bytes = base64.b64decode(image_data)
+        np_arr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return jsonify({"error": "Invalid image data"}), 400
+
+        filename_id = str(uuid.uuid4())
+        id_face, id_meta, holder_face, holder_meta = extract_holder_and_id_card_faces(img, None, False)
+
+        holder_filename = None
+        if holder_face is not None:
+            holder_filename = f"live_holder_{filename_id}.jpg"
+            if not _save_jpg(os.path.join(app.config['UPLOAD_FOLDER'], holder_filename), holder_face):
+                holder_filename = None
+
+        id_filename = None
+        if id_face is not None:
+            id_filename = f"live_idface_{filename_id}.jpg"
+            if not _save_jpg(os.path.join(app.config['UPLOAD_FOLDER'], id_filename), id_face):
+                id_filename = None
+
+        from ocr.quality import assess_live_frame
+        quality = assess_live_frame(img)
+
+        person_detected = holder_face is not None
+        return jsonify(_json_safe({
+            "status": "success" if person_detected else "no_face",
+            "person_detected": person_detected,
+            "person_confidence": holder_meta.get("confidence"),
+            "person_face_image_url": f"/ocr_uploads/{holder_filename}" if holder_filename else None,
+            "id_card_photo_detected": id_face is not None,
+            "id_card_photo_confidence": id_meta.get("confidence"),
+            "id_card_face_image_url": f"/ocr_uploads/{id_filename}" if id_filename else None,
+            "faces_found": (1 if holder_face is not None else 0) + (1 if id_face is not None else 0),
+            "quality": quality,
+            "detector": holder_meta.get("source") or id_meta.get("source") or "none",
+        }))
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "failed", "error": str(e)}), 500
+
 
 @app.route('/api/v1/ocr', methods=['POST'])
 def run_ocr():

@@ -25,6 +25,16 @@ def post_ocr(file_bytes: bytes, filename: str, document_type: str | None = None)
         return rv.status_code, body
 
 
+def post_live_face_check(payload: dict) -> tuple[int, dict]:
+    with _lock:
+        client = _flask_app().test_client()
+        rv = client.post("/api/v1/live_face_check", json=payload)
+        body = rv.get_json(silent=True)
+        if body is None:
+            body = {"error": (rv.data or b"")[:300].decode("utf-8", errors="ignore")}
+        return rv.status_code, body
+
+
 def post_live_verify(payload: dict) -> tuple[int, dict]:
     with _lock:
         client = _flask_app().test_client()

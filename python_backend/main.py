@@ -2,6 +2,9 @@ import os
 import uvicorn
 import logging
 
+# Must be set before anything imports TensorFlow: RetinaFace needs Keras 2.
+os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+
 # OCR (Paddle) loads first with a temporary torch mock, then releases it.
 import ocr.engine  # noqa: F401
 
@@ -73,7 +76,7 @@ DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASS = os.getenv("DB_PASSWORD", "dinesh_2006")
 DB_NAME = os.getenv("DB_NAME", "doctor_verification_db")
 
-SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 try:
     engine = create_engine(SQLALCHEMY_DATABASE_URL)

@@ -17,7 +17,8 @@ class DocumentRepository:
         return self.db.query(DoctorDocument).filter(
             DoctorDocument.doctor_id == str(doctor_id),
             DoctorDocument.is_latest == True,
-        ).all()
+            DoctorDocument.deleted_at.is_(None),
+        ).order_by(DoctorDocument.version.desc()).all()
 
     def FindByDoctorAndType(self, doctor_id: UUID, doc_type: str) -> List[DoctorDocument]:
         return self.db.query(DoctorDocument).filter(

@@ -8,6 +8,7 @@ AUTO_VERIFIED / MANUAL_REVIEW / FAILED.
 import os
 import re
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from entities.doctor import DoctorStatus
 from entities.history import VerificationHistory
 from entities.document import OCRStatus
@@ -25,7 +26,7 @@ class DefaultEkycEvaluationService:
         self.uploads_dir = uploads_dir or os.path.join(os.path.dirname(__file__), "..", "uploads")
         self.uploads_dir = os.path.abspath(self.uploads_dir)
 
-    def Evaluate(self, doctor_public_id: str) -> dict:
+    def Evaluate(self, doctor_public_id: str, document_ids=None) -> dict:
         stages = []
         doc = self.doctorRepo.FindByPublicID(str(doctor_public_id))
         if not doc:
@@ -53,6 +54,17 @@ class DefaultEkycEvaluationService:
         stages.append(self._stage(1, "Application Submitted", "done", "Doctor verification package loaded"))
 
         docs = self.docRepo.FindByDoctorID(doc.id) or []
+
+        # Scope to the documents the portal actually submitted in this session.
+        # Without this, IDs vaulted during earlier sessions (e.g. a PAN from a
+        # previous run) reappear in the results even though they were not part
+        # of this verification attempt.
+        if document_ids:
+            wanted = {str(x) for x in document_ids if x}
+            scoped = [d for d in docs if str(d.document_id) in wanted]
+            if scoped:
+                docs = scoped
+
         if not docs:
             stages.append(self._stage(2, "eKYC Document OCR", "failed", "No uploaded documents found"))
             return self._finalize(doc, "FAILED", stages, [], ["No documents available for eKYC evaluation"])
@@ -60,12 +72,14 @@ class DefaultEkycEvaluationService:
         kyc_docs = [d for d in docs if self._doc_type(d) in self.KYC_TYPES]
         # Prefer govt ID; if none, still OCR registration/degree docs for demo continuity
         target_docs = kyc_docs if kyc_docs else docs[:2]
+        target_docs = self._dedupe_by_type(target_docs)
 
+        target_summary = ", ".join(sorted(self._doc_type(d) for d in target_docs)) or "none"
         stages.append(self._stage(
             2,
             "eKYC OCR + Face Extraction",
             "running",
-            f"Running OCR + face extraction on {len(target_docs)} document(s)",
+            f"Running OCR + face extraction on {len(target_docs)} document(s): {target_summary}",
         ))
 
         document_results = []
@@ -97,7 +111,7 @@ class DefaultEkycEvaluationService:
                 2,
                 "eKYC OCR + Face Extraction",
                 "done",
-                f"OCR completed on {len(success_docs)}/{len(target_docs)} document(s)",
+                f"OCR completed on {len(success_docs)}/{len(target_docs)} document(s): {target_summary}",
             )
         else:
             stages[1] = self._stage(
@@ -116,10 +130,16 @@ class DefaultEkycEvaluationService:
         face_detected = False
         best_fields = {}
         best_conf = 0.0
+        # Pick the fields from the most confident document instead of whichever
+        # one happened to be processed last.
+        best_field_conf = -1.0
         for r in success_docs:
             fields = r.get("parsed_fields") or {}
-            best_fields = fields or best_fields
-            best_conf = max(best_conf, float(r.get("ocr_confidence") or 0))
+            conf = float(r.get("ocr_confidence") or 0)
+            if fields and conf > best_field_conf:
+                best_fields = fields
+                best_field_conf = conf
+            best_conf = max(best_conf, conf)
             if r.get("face_detected") or r.get("face_image_url"):
                 face_detected = True
             if fields.get("aadhaar_number_validated") or fields.get("pan_number_validated"):
@@ -141,6 +161,12 @@ class DefaultEkycEvaluationService:
 
         # Stage 4: Name similarity vs profile
         ocr_name = (best_fields.get("name") or "").strip()
+        if not ocr_name:
+            for r in success_docs:
+                candidate = ((r.get("parsed_fields") or {}).get("name") or "").strip()
+                if candidate:
+                    ocr_name = candidate
+                    break
         profile_name = f"{doc.first_name or ''} {doc.last_name or ''}".strip()
         name_score = self._name_similarity(ocr_name, profile_name) if ocr_name else 0
         stages.append(self._stage(
@@ -283,13 +309,34 @@ class DefaultEkycEvaluationService:
         if not file_url:
             return ""
         url = file_url.replace("\\", "/")
-        for prefix in ("/uploads/", "uploads/"):
-            if url.startswith(prefix):
-                rel = url[len(prefix):]
-                return os.path.join(self.uploads_dir, rel.replace("/", os.sep))
+
+        # Older rows stored the fully qualified URL (e.g.
+        # "http://localhost:8080/uploads/doctors/..."), which used to resolve to
+        # a nonexistent path and failed the whole evaluation. Strip the origin.
+        if "://" in url:
+            url = urlparse(url).path or ""
+
+        marker = "/uploads/"
+        if marker in url:
+            rel = url.split(marker, 1)[1]
+            return os.path.join(self.uploads_dir, rel.replace("/", os.sep))
+        if url.startswith("uploads/"):
+            rel = url[len("uploads/"):]
+            return os.path.join(self.uploads_dir, rel.replace("/", os.sep))
         if os.path.isabs(url) and os.path.exists(url):
             return url
         return os.path.join(self.uploads_dir, url.lstrip("/").replace("/", os.sep))
+
+    def _dedupe_by_type(self, docs):
+        """Keep only the highest-version document per type so the results panel
+        never shows the same ID twice."""
+        best = {}
+        for d in docs:
+            key = self._doc_type(d)
+            current = best.get(key)
+            if current is None or (getattr(d, "version", 0) or 0) > (getattr(current, "version", 0) or 0):
+                best[key] = d
+        return list(best.values())
 
     def _doc_type(self, d) -> str:
         return d.document_type.value if hasattr(d.document_type, "value") else str(d.document_type)
@@ -306,10 +353,33 @@ class DefaultEkycEvaluationService:
         return f"eKYC evaluation failed. {'; '.join(reasons) if reasons else 'Unknown error'}"
 
     def _name_similarity(self, a: str, b: str) -> int:
-        a_tok = set(re.findall(r"[a-z]+", a.lower()))
-        b_tok = set(re.findall(r"[a-z]+", b.lower()))
+        """Score two names 0-100.
+
+        Indian ID cards frequently render the surname as a single initial
+        ("Dinesh S"), so a plain Jaccard over word sets punished correct matches.
+        Tokens are matched against the shorter name and initials count as a
+        partial match against a full word starting with the same letter.
+        """
+        a_tok = re.findall(r"[a-z]+", a.lower())
+        b_tok = re.findall(r"[a-z]+", b.lower())
         if not a_tok or not b_tok:
             return 0
-        inter = len(a_tok & b_tok)
-        union = len(a_tok | b_tok)
-        return int(round(100.0 * inter / union)) if union else 0
+
+        remaining = list(b_tok)
+        score = 0.0
+        for token in a_tok:
+            exact = next((t for t in remaining if t == token), None)
+            if exact:
+                remaining.remove(exact)
+                score += 1.0
+                continue
+            initial = next(
+                (t for t in remaining if (len(token) == 1 and t.startswith(token)) or (len(t) == 1 and token.startswith(t))),
+                None,
+            )
+            if initial:
+                remaining.remove(initial)
+                score += 0.75
+
+        denominator = min(len(a_tok), len(b_tok))
+        return int(round(100.0 * min(score, denominator) / denominator))

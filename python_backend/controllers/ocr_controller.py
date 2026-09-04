@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from ocr.inproc import post_live_verify, post_ocr
+from ocr.inproc import post_live_face_check, post_live_verify, post_ocr
 
 router = APIRouter(tags=["ocr"])
 
@@ -31,4 +31,11 @@ async def run_ocr(
 async def live_verify(request: Request):
     payload = await request.json()
     code, data = await asyncio.to_thread(post_live_verify, payload)
+    return JSONResponse(content=data, status_code=code)
+
+
+@router.post("/api/v1/live_face_check")
+async def live_face_check(request: Request):
+    payload = await request.json()
+    code, data = await asyncio.to_thread(post_live_face_check, payload)
     return JSONResponse(content=data, status_code=code)
