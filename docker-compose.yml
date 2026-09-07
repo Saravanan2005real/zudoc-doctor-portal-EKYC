@@ -1,10 +1,8 @@
-version: '3.8'
-
 services:
-  doctor-service:
+  backend_api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: backend_api/Dockerfile
     ports:
       - "8085:8080"
     environment:
@@ -18,12 +16,21 @@ services:
       - JWT_SECRET=production-jwt-secret-key-doctor-verification-portal
       - SMS_PROVIDER=MOCK
       - PORT=8080
+    volumes:
+      - ./uploads:/app/uploads
     depends_on:
       - postgres
       - redis
       - rabbitmq
 
-
+  ocr_engine:
+    build:
+      context: ./ocr_engine
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./ocr_uploads:/app/ocr_uploads
 
   postgres:
     image: postgres:15-alpine
@@ -51,10 +58,18 @@ services:
     image: nginx:alpine
     ports:
       - "8081:80"
+      - "8082:8082"
+      - "8084:8084"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./frontend_portal:/usr/share/nginx/html/frontend_portal:ro
+      - ./b2b_portal:/usr/share/nginx/html/b2b_portal:ro
+      - ./customer_portal:/usr/share/nginx/html/customer_portal:ro
+      - ./uploads:/usr/share/nginx/html/uploads:ro
+      - ./ocr_uploads:/usr/share/nginx/html/ocr_uploads:ro
     depends_on:
-      - doctor-service
+      - backend_api
+      - ocr_engine
 
 volumes:
   postgres_data:

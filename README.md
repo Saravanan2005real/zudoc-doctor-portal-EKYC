@@ -88,7 +88,7 @@ flowchart TB
 | Database | PostgreSQL | **:5433** local / **:5432** Compose | Doctors, docs, OTP, history |
 | Nginx | `nginx.conf` | **:80** | Reverse proxy (Compose) |
 
-See also: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`DESIGN.md`](DESIGN.md).
+See also: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`DESIGN.md`](DESIGN.md), [`computational.md`](computational.md).
 
 ---
 
@@ -217,7 +217,7 @@ flowchart TD
 
 ---
 
-## Eye tracking module (`eye tracking/`)
+## Eye tracking module (`python_backend/eye_tracking/`)
 
 Standalone webcam module built around **FGI-Net** (*Fusion Global Information* gaze estimator) plus **MediaPipe Face Mesh** iris landmarks.
 
@@ -247,7 +247,7 @@ flowchart TD
 ### Package layout
 
 ```text
-eye tracking/
+python_backend/eye_tracking/
 ├── FGI-Net/                 # Upstream architecture reference
 ├── fgi_eye_tracker/         # Our package
 │   ├── fgi_net.py           # Import-safe FGI-Net
@@ -270,7 +270,7 @@ eye tracking/
 ### Run eye tracking
 
 ```powershell
-cd "eye tracking"
+cd python_backend/eye_tracking
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
@@ -299,17 +299,16 @@ python demo.py
 
 ```text
 eKYC/
-├── python_backend/          # FastAPI portal backend (contains public/ UI folder)
-├── ocr_service/             # Flask OCR + face microservice
+├── python_backend/          # FastAPI portal (contains UI, OCR, and eye_tracking)
 ├── src/disability-app/      # Source code for the React Accessibility module
-├── eye tracking/            # FGI-Net eye tracking module + demo
-├── migrations/              # SQL 000001–000006
+├── migrations/              # SQL migrations
 ├── docs/                    # ARCHITECTURE.md, openapi.yaml
-├── k8s/
+├── k8s/                     # Kubernetes manifests
 ├── docker-compose.yml
 ├── Dockerfile
 ├── nginx.conf
 ├── DESIGN.md
+├── computational.md         # Hardware and compute requirements
 └── README.md
 ```
 
@@ -363,6 +362,22 @@ docker compose up --build
 | Portal / API / OCR | http://localhost:8080 |
 | Nginx | http://localhost:80 |
 | Postgres | localhost:5432 |
+| B2B Portal | http://localhost:8082 |
+| Customer Portal (New) | http://localhost:8084 |
+
+---
+
+## Verifyyy Super Admin Dashboard
+
+The platform includes a modern React-based Super Admin dashboard to manage companies, services, applications, and pipeline requests natively.
+
+```bash
+cd src/superadmin
+npm install
+npm run dev
+```
+
+→ `http://localhost:5173` — Super Admin Dashboard
 
 ---
 
@@ -395,8 +410,9 @@ docker compose up --build
 ## Further reading
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Mermaid system / sequence / deploy views
-- [`eye tracking/README.md`](eye%20tracking/README.md) — optional FGI-Net module
+- [`python_backend/eye_tracking/README.md`](python_backend/eye_tracking/README.md) — optional FGI-Net module
 - [`DESIGN.md`](DESIGN.md) — design goals & extensibility
+- [`computational.md`](computational.md) — hardware & compute requirements
 - [`docs/openapi.yaml`](docs/openapi.yaml) — API contract
 
 ---

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZuDoc eKYC API - Business Portal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <nav class="navbar">
+        <a href="/" class="logo">ZuDoc API</a>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#request">Request Access</a>
+            <a href="/admin.html">Admin</a>
+        </div>
+    </nav>
+
+    <div class="hero">
+        <h1>Enterprise Identity <br/> Verification Infrastructure</h1>
+        <p>Integrate our state-of-the-art eKYC APIs into your platform. Features include automated OCR for Aadhaar/PAN, dual-mode liveness checks (Eye Tracking & Audio-Guided), and high-confidence cross-matching.</p>
+        <a href="#request" class="btn">Get API Access</a>
+        <a href="#features" class="btn btn-outline">Read Docs</a>
+    </div>
+
+    <div class="container" id="request">
+        <h2 style="margin-top:0; margin-bottom: 24px; font-weight:800; text-align:center;">Request Service Access</h2>
+        <p style="text-align:center; color:var(--text-muted); margin-bottom: 32px;">Tell us about your company and requirements. Our team will review your application and provide API credentials.</p>
+        
+        <div id="alert-box" class="alert"></div>
+
+        <form id="b2b-form">
+            <div class="form-group">
+                <label for="company_name">Company Name</label>
+                <input type="text" id="company_name" name="company_name" required placeholder="e.g. Acme Corp">
+            </div>
+
+            <div class="form-group">
+                <label for="contact_name">Primary Contact Name</label>
+                <input type="text" id="contact_name" name="contact_name" required placeholder="Jane Doe">
+            </div>
+
+            <div class="form-group">
+                <label for="contact_email">Work Email</label>
+                <input type="email" id="contact_email" name="contact_email" required placeholder="jane@acmecorp.com">
+            </div>
+
+            <div class="form-group">
+                <label for="industry">Industry</label>
+                <select id="industry" name="industry" required>
+                    <option value="" disabled selected>Select an industry...</option>
+                    <option value="Healthcare">Healthcare & Telemedicine</option>
+                    <option value="Fintech">Fintech & Banking</option>
+                    <option value="Insurance">Insurance</option>
+                    <option value="Gig Economy">Gig Economy & Marketplaces</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="expected_volume">Expected Monthly Verifications</label>
+                <select id="expected_volume" name="expected_volume" required>
+                    <option value="" disabled selected>Select expected volume...</option>
+                    <option value="< 1,000">Less than 1,000</option>
+                    <option value="1,000 - 10,000">1,000 - 10,000</option>
+                    <option value="10,000 - 100,000">10,000 - 100,000</option>
+                    <option value="100,000+">100,000+</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="requirements">Specific Requirements (Optional)</label>
+                <textarea id="requirements" name="requirements" rows="4" placeholder="e.g., We need specific SLAs for the Audio-Guided Liveness check..."></textarea>
+            </div>
+
+            <button type="submit" class="btn" style="width: 100%; margin-top: 16px;">Submit Request</button>
+        </form>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

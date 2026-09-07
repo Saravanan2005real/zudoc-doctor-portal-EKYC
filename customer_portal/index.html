@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZuDoc eKYC API - Customer Portal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <nav class="navbar">
+        <a href="/" class="logo">ZuDoc Services</a>
+        <div class="nav-links">
+            <a href="#products">Products</a>
+            <a href="#request">Request Pipeline</a>
+        </div>
+    </nav>
+
+    <div class="hero">
+        <h1>Discover the Next Generation of Identity Verification</h1>
+        <p>Explore our cutting-edge eKYC APIs. Whether you need automated OCR, dual-mode liveness checks, or robust cross-matching, we can build a personalized pipeline that perfectly suits your business needs.</p>
+        <a href="#products" class="btn">View Products</a>
+        <a href="#request" class="btn btn-outline">Request Pipeline</a>
+    </div>
+
+    <!-- Products Section -->
+    <div class="container" id="products" style="max-width: 800px; margin-bottom: 40px;">
+        <h2 style="margin-top:0; margin-bottom: 24px; font-weight:800; text-align:center;">Our Products</h2>
+        <div class="dashboard-grid" style="grid-template-columns: 1fr 1fr; margin: 0; max-width: 100%;">
+            <div class="card">
+                <h3 style="color: var(--accent-color);">Automated OCR Engine</h3>
+                <p>Extract highly accurate data from Aadhaar and PAN cards instantly using our advanced machine learning models.</p>
+            </div>
+            <div class="card">
+                <h3 style="color: var(--accent-color);">Dual-Mode Liveness Check</h3>
+                <p>Ensure user presence with state-of-the-art Eye Tracking and Audio-Guided liveness detection, beating spoofing attempts.</p>
+            </div>
+            <div class="card">
+                <h3 style="color: var(--accent-color);">Cross-Matching</h3>
+                <p>Automatically match extracted faces and data points with live captures for a high-confidence identity verification.</p>
+            </div>
+            <div class="card">
+                <h3 style="color: var(--accent-color);">Fraud Analysis</h3>
+                <p>Deep scan of documents and video feeds to detect tampering, deepfakes, and synthetic media attacks.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="container" id="request">
+        <h2 style="margin-top:0; margin-bottom: 24px; font-weight:800; text-align:center;">Request a Personalized Pipeline</h2>
+        <p style="text-align:center; color:var(--text-muted); margin-bottom: 32px;">Tell us about your requirements. Select the services you need, and our team will build a custom pipeline just for you.</p>
+        
+        <div id="alert-box" class="alert"></div>
+
+        <form id="customer-form">
+            <div class="form-group">
+                <label for="company_name">Company Name</label>
+                <input type="text" id="company_name" name="company_name" required placeholder="e.g. Acme Corp">
+            </div>
+
+            <div class="form-group">
+                <label for="contact_name">Primary Contact Name</label>
+                <input type="text" id="contact_name" name="contact_name" required placeholder="Jane Doe">
+            </div>
+
+            <div class="form-group">
+                <label for="contact_email">Work Email</label>
+                <input type="email" id="contact_email" name="contact_email" required placeholder="jane@acmecorp.com">
+            </div>
+
+            <div class="form-group">
+                <label for="industry">Industry</label>
+                <select id="industry" name="industry" required>
+                    <option value="" disabled selected>Select an industry...</option>
+                    <option value="Healthcare">Healthcare & Telemedicine</option>
+                    <option value="Fintech">Fintech & Banking</option>
+                    <option value="Insurance">Insurance</option>
+                    <option value="Gig Economy">Gig Economy & Marketplaces</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="expected_volume">Expected Monthly Verifications</label>
+                <select id="expected_volume" name="expected_volume" required>
+                    <option value="" disabled selected>Select expected volume...</option>
+                    <option value="< 1,000">Less than 1,000</option>
+                    <option value="1,000 - 10,000">1,000 - 10,000</option>
+                    <option value="10,000 - 100,000">10,000 - 100,000</option>
+                    <option value="100,000+">100,000+</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Desired Pipeline Services (Check all that apply)</label>
+                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
+                    <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; color: white;">
+                        <input type="checkbox" name="services" value="OCR" style="width: auto;"> Document OCR
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; color: white;">
+                        <input type="checkbox" name="services" value="Liveness" style="width: auto;"> Liveness Detection
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; color: white;">
+                        <input type="checkbox" name="services" value="CrossMatch" style="width: auto;"> Face & Data Cross-Matching
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; color: white;">
+                        <input type="checkbox" name="services" value="Fraud" style="width: auto;"> Fraud Detection
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="requirements">Specific Pipeline Requirements / Custom Logic (Optional)</label>
+                <textarea id="requirements" name="requirements" rows="4" placeholder="e.g., We need Liveness to happen before OCR, and if OCR fails, escalate to human review..."></textarea>
+            </div>
+
+            <button type="submit" class="btn" id="submit-btn" style="width: 100%; margin-top: 16px;">Request Pipeline</button>
+        </form>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

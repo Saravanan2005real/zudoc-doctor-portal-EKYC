@@ -1,0 +1,12 @@
+flask
+flask-cors
+opencv-contrib-python==4.10.0.84
+paddleocr
+pillow
+paddlepaddle
+ultralytics
+torch>=2.1
+tensorflow
+tf-keras
+retina-face
+deepface
