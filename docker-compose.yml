@@ -71,5 +71,17 @@ services:
       - backend_api
       - ocr_engine
 
+  superadmin:
+    build:
+      context: ./src/superadmin
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./src/superadmin:/app
+      - /app/node_modules
+    depends_on:
+      - backend_api
+
 volumes:
   postgres_data:
