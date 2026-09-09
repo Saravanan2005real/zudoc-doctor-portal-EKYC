@@ -1,65 +1,136 @@
-document.getElementById('customer-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    const form = e.target;
-    const submitBtn = document.getElementById('submit-btn');
-    const alertBox = document.getElementById('alert-box');
-    
-    submitBtn.textContent = 'Submitting Request...';
-    submitBtn.disabled = true;
-    alertBox.style.display = 'none';
-    alertBox.className = 'alert';
+const availableModules = [
+    { id: 'ocr', name: 'Document OCR', desc: 'Extract data from Aadhaar, PAN, and passports.' },
+    { id: 'liveness', name: 'Liveness Detection', desc: 'Verify user presence via eye-tracking or video.' },
+    { id: 'cross_match', name: 'Cross-Matching', desc: 'Match face and extracted data for high confidence.' },
+    { id: 'fraud_analysis', name: 'Fraud Analysis', desc: 'Deep scan for tampering, deepfakes, and synthetic media.' }
+];
 
-    const formData = new FormData(form);
-    
-    // Get selected services
-    const selectedServices = [];
-    document.querySelectorAll('input[name="services"]:checked').forEach((checkbox) => {
-        selectedServices.push(checkbox.value);
+let pipeline = [];
+
+const moduleListEl = document.getElementById('available-modules');
+const canvasEl = document.getElementById('pipeline-canvas');
+const emptyCanvasEl = document.getElementById('canvas-empty');
+const generateBtn = document.getElementById('generate-btn');
+const clearBtn = document.getElementById('clear-btn');
+
+const modal = document.getElementById('link-modal');
+const closeModalBtn = document.getElementById('close-modal');
+const copyBtn = document.getElementById('copy-btn');
+const previewBtn = document.getElementById('preview-btn');
+const generatedLinkEl = document.getElementById('generated-link');
+
+// Render Available Modules
+function renderAvailableModules() {
+    moduleListEl.innerHTML = '';
+    availableModules.forEach(mod => {
+        const div = document.createElement('div');
+        div.className = 'module-item';
+        div.innerHTML = `
+            <div class="module-info">
+                <h4>${mod.name}</h4>
+                <p>${mod.desc}</p>
+            </div>
+            <div class="module-add">+</div>
+        `;
+        div.onclick = () => addModuleToPipeline(mod);
+        moduleListEl.appendChild(div);
+    });
+}
+
+// Add to Pipeline
+function addModuleToPipeline(mod) {
+    pipeline.push({ ...mod, uniqueId: Date.now() + Math.random() });
+    renderPipeline();
+}
+
+// Remove from Pipeline
+function removeModule(uniqueId) {
+    pipeline = pipeline.filter(m => m.uniqueId !== uniqueId);
+    renderPipeline();
+}
+
+// Clear Pipeline
+clearBtn.addEventListener('click', () => {
+    pipeline = [];
+    renderPipeline();
+});
+
+// Render Pipeline Canvas
+function renderPipeline() {
+    // Clear everything except empty state
+    Array.from(canvasEl.children).forEach(child => {
+        if (child.id !== 'canvas-empty') {
+            canvasEl.removeChild(child);
+        }
     });
 
-    // Combine services into requirements
-    let requirementsText = formData.get('requirements');
-    if (selectedServices.length > 0) {
-        requirementsText = `Requested Services: [${selectedServices.join(', ')}]\n\nDetails: ` + requirementsText;
-    }
-    
-    const data = {
-        company_name: formData.get('company_name'),
-        contact_name: formData.get('contact_name'),
-        contact_email: formData.get('contact_email'),
-        industry: formData.get('industry'),
-        expected_volume: formData.get('expected_volume'),
-        requirements: requirementsText
-    };
+    if (pipeline.length === 0) {
+        emptyCanvasEl.style.display = 'block';
+        generateBtn.disabled = true;
+    } else {
+        emptyCanvasEl.style.display = 'none';
+        generateBtn.disabled = false;
 
-    try {
-        const response = await fetch('/api/v1/b2b/requests', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(data)
+        pipeline.forEach((mod, index) => {
+            const node = document.createElement('div');
+            node.className = 'pipeline-node';
+            node.innerHTML = `
+                <h4>${index + 1}. ${mod.name}</h4>
+                <button class="remove-node" onclick="removeModule(${mod.uniqueId})">&times;</button>
+            `;
+            canvasEl.appendChild(node);
+
+            // Add connector line if not the last item
+            if (index < pipeline.length - 1) {
+                const connector = document.createElement('div');
+                connector.className = 'pipeline-connector';
+                canvasEl.appendChild(connector);
+            }
         });
-
-        const result = await response.json();
-
-        if (response.ok) {
-            alertBox.textContent = result.message || 'Request submitted successfully!';
-            alertBox.className = 'alert success';
-            alertBox.style.display = 'block';
-            form.reset();
-        } else {
-            alertBox.textContent = result.detail || result.message || 'An error occurred while submitting the request.';
-            alertBox.className = 'alert error';
-            alertBox.style.display = 'block';
-        }
-    } catch (err) {
-        alertBox.textContent = 'Network error. Please try again later.';
-        alertBox.className = 'alert error';
-        alertBox.style.display = 'block';
-    } finally {
-        submitBtn.textContent = 'Request Pipeline';
-        submitBtn.disabled = false;
     }
+}
+
+// Generate Link
+generateBtn.addEventListener('click', () => {
+    generateBtn.textContent = 'Generating...';
+    generateBtn.disabled = true;
+
+    setTimeout(() => {
+        const uuid = crypto.randomUUID ? crypto.randomUUID() : 'req-' + Date.now();
+        const link = `https://verify.verifyyy.com/session?id=${uuid}`;
+        
+        // Save pipeline config to localStorage for the preview session
+        localStorage.setItem(`pipeline_${uuid}`, JSON.stringify(pipeline));
+        
+        generatedLinkEl.textContent = link;
+        previewBtn.dataset.uuid = uuid;
+        modal.style.display = 'flex';
+        
+        generateBtn.textContent = 'Generate Link';
+        generateBtn.disabled = false;
+    }, 800);
 });
+
+// Modal Actions
+closeModalBtn.addEventListener('click', () => {
+    modal.style.display = 'none';
+});
+
+previewBtn.addEventListener('click', () => {
+    const uuid = previewBtn.dataset.uuid;
+    window.open(`verify-session.html?id=${uuid}`, '_blank');
+});
+
+copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(generatedLinkEl.textContent).then(() => {
+        const originalText = copyBtn.textContent;
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => {
+            copyBtn.textContent = originalText;
+        }, 2000);
+    });
+});
+
+// Initialize
+renderAvailableModules();
+renderPipeline();

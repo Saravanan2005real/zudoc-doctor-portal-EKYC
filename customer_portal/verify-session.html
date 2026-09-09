@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verifyyy - Identity Verification</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body {
+            background-color: #f1f5f9; /* Slightly darker slate for session focus */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .session-card {
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 40px -15px rgba(0,0,0,0.1);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+            border: 1px solid var(--border-color);
+        }
+        .session-header {
+            margin-bottom: 32px;
+        }
+        .session-header .logo {
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+        .step-container {
+            display: none;
+            animation: fadeIn 0.4s ease-out;
+        }
+        .step-container.active {
+            display: block;
+        }
+        .step-icon {
+            font-size: 3rem;
+            margin-bottom: 16px;
+        }
+        .upload-area {
+            border: 2px dashed var(--accent-light);
+            background: rgba(45, 212, 191, 0.05);
+            padding: 32px;
+            border-radius: 16px;
+            cursor: pointer;
+            margin: 24px 0;
+            transition: all 0.2s;
+        }
+        .upload-area:hover {
+            background: rgba(45, 212, 191, 0.1);
+            border-color: var(--accent-color);
+        }
+        .loader {
+            border: 4px solid #e2e8f0;
+            border-top: 4px solid var(--accent-color);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 24px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .result-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 16px;
+            border-radius: 12px;
+            margin-top: 16px;
+            text-align: left;
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: var(--text-color);
+        }
+        .progress-bar {
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            margin-bottom: 32px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-color);
+            width: 0%;
+            transition: width 0.4s ease;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="session-card">
+        <div class="session-header">
+            <div class="logo">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-color);">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                    <path d="M9 12l2 2 4-4"></path>
+                </svg>
+                <span style="font-size: 1.75rem;">Verifyyy</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.95rem; margin:0;" id="session-subtitle">Identity Verification Session</p>
+        </div>
+
+        <div class="progress-bar" id="progress-bar" style="display: none;">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+
+        <div id="steps-wrapper">
+            <!-- Loading Step -->
+            <div class="step-container active" id="step-loading">
+                <div class="loader"></div>
+                <h3>Initializing Session...</h3>
+                <p style="color: var(--text-muted);">Retrieving pipeline configuration securely.</p>
+            </div>
+            
+            <!-- Dynamic steps will be injected here by JS -->
+
+            <!-- Error Step -->
+            <div class="step-container" id="step-error">
+                <div class="step-icon">⚠️</div>
+                <h3 style="color: var(--danger);">Invalid Session</h3>
+                <p style="color: var(--text-muted);">The verification session ID is missing or invalid.</p>
+            </div>
+
+            <!-- Final Result Step -->
+            <div class="step-container" id="step-final">
+                <div class="step-icon">✅</div>
+                <h3 style="color: var(--success);">Verification Complete</h3>
+                <p style="color: var(--text-muted);">All data has been successfully verified.</p>
+                <div class="result-box" id="result-box">
+                    // Results will appear here
+                </div>
+                <button class="btn" style="margin-top: 24px; width: 100%;" onclick="window.close()">Return to Application</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="verify-session.js"></script>
+</body>
+</html>

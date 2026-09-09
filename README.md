@@ -1,8 +1,15 @@
-# ZuDoc — Doctor Verification, eKYC & Eye Tracking
+# Verifyyy — Identity Verification OS, eKYC & Eye Tracking
 
 Enterprise-style **doctor identity verification (eKYC)** for healthcare platforms, with **browser liveness** (WebGazer eye tracking or audio-guided checks for accessibility) and an optional standalone **FGI-Net** eye-tracking module.
 
 **Repository:** [github.com/Saravanan2005real/zudoc-doctor-portal-EKYC](https://github.com/Saravanan2005real/zudoc-doctor-portal-EKYC)
+
+## New Feature: B2B Pipeline Builder
+The `customer_portal/` now includes a full B2B Pipeline Builder. Business clients can:
+- Select from modules like **OCR**, **Liveness**, **Cross-Matching**, and **Fraud Analysis**.
+- Generate an instant `verifyyy.com` integration link.
+- Preview the generated end-user verification flow natively via `verify-session.html`.
+
 
 ---
 

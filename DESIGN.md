@@ -1,8 +1,8 @@
-# Design Document — Doctor eKYC Verification Service
+# Design Document — Verifyyy eKYC Verification Service
 
 ## 1. Purpose
 
-This service is the **doctor verification (eKYC) engine** for the Zudoc Doctor Portal. It lets licensed medical practitioners prove identity and credentials so the platform can trust them for clinical workflows (e.g. prescriptions).
+This service is the **doctor verification (eKYC) engine** for the Verifyyy Doctor Portal. It lets licensed medical practitioners prove identity and credentials so the platform can trust them for clinical workflows (e.g. prescriptions).
 
 Goals:
 

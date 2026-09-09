@@ -3,120 +3,81 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZuDoc eKYC API - Customer Portal</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <title>Verifyyy - Build Your Pipeline</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <!-- SVG Icon for ShieldCheck -->
 </head>
 <body>
 
     <nav class="navbar">
-        <a href="/" class="logo">ZuDoc Services</a>
+        <a href="/" class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-shield" style="color: var(--accent-color);">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                <path d="M9 12l2 2 4-4"></path>
+            </svg>
+            Verifyyy
+        </a>
         <div class="nav-links">
-            <a href="#products">Products</a>
-            <a href="#request">Request Pipeline</a>
+            <a href="#products">Documentation</a>
+            <a href="#builder">Pipeline Builder</a>
         </div>
     </nav>
 
     <div class="hero">
-        <h1>Discover the Next Generation of Identity Verification</h1>
-        <p>Explore our cutting-edge eKYC APIs. Whether you need automated OCR, dual-mode liveness checks, or robust cross-matching, we can build a personalized pipeline that perfectly suits your business needs.</p>
-        <a href="#products" class="btn">View Products</a>
-        <a href="#request" class="btn btn-outline">Request Pipeline</a>
+        <div style="display:inline-block; px-4; py-1.5; border-radius:9999px; background-color: rgba(45, 212, 191, 0.1); border: 1px solid rgba(45, 212, 191, 0.2); color: var(--accent-color); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 24px; padding: 6px 16px;">
+            The Verification OS
+        </div>
+        <h1>Your Platform. <br><span>Your Decisions. Your Edge.</span></h1>
+        <p>Build a fully customized eKYC flow in seconds. Select the modules you need, arrange them, and generate an integration link instantly. Reduce fraud with our clinical curator.</p>
+        <a href="#builder" class="btn">Start Building</a>
     </div>
 
-    <!-- Products Section -->
-    <div class="container" id="products" style="max-width: 800px; margin-bottom: 40px;">
-        <h2 style="margin-top:0; margin-bottom: 24px; font-weight:800; text-align:center;">Our Products</h2>
-        <div class="dashboard-grid" style="grid-template-columns: 1fr 1fr; margin: 0; max-width: 100%;">
-            <div class="card">
-                <h3 style="color: var(--accent-color);">Automated OCR Engine</h3>
-                <p>Extract highly accurate data from Aadhaar and PAN cards instantly using our advanced machine learning models.</p>
-            </div>
-            <div class="card">
-                <h3 style="color: var(--accent-color);">Dual-Mode Liveness Check</h3>
-                <p>Ensure user presence with state-of-the-art Eye Tracking and Audio-Guided liveness detection, beating spoofing attempts.</p>
-            </div>
-            <div class="card">
-                <h3 style="color: var(--accent-color);">Cross-Matching</h3>
-                <p>Automatically match extracted faces and data points with live captures for a high-confidence identity verification.</p>
-            </div>
-            <div class="card">
-                <h3 style="color: var(--accent-color);">Fraud Analysis</h3>
-                <p>Deep scan of documents and video feeds to detect tampering, deepfakes, and synthetic media attacks.</p>
+    <!-- Pipeline Builder Section -->
+    <div class="builder-container" id="builder">
+        
+        <!-- Left Panel: Available Modules -->
+        <div class="builder-panel">
+            <h3 class="panel-title">Available Modules</h3>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 24px;">Click a module to add it to your pipeline.</p>
+            
+            <div class="module-list" id="available-modules">
+                <!-- Modules will be injected by JS -->
             </div>
         </div>
+
+        <!-- Right Panel: Canvas & Action -->
+        <div class="builder-panel">
+            <h3 class="panel-title">Your Pipeline</h3>
+            
+            <div class="pipeline-canvas" id="pipeline-canvas">
+                <div class="canvas-empty" id="canvas-empty">
+                    <p>Your pipeline is empty.</p>
+                    <p style="font-size: 0.85rem;">Add modules from the left panel to get started.</p>
+                </div>
+                <!-- Nodes will be injected by JS -->
+            </div>
+
+            <div class="action-area">
+                <button class="btn btn-outline" id="clear-btn" style="margin-right: 16px;">Clear</button>
+                <button class="btn" id="generate-btn" disabled>Generate Link</button>
+            </div>
+        </div>
+
     </div>
 
-    <div class="container" id="request">
-        <h2 style="margin-top:0; margin-bottom: 24px; font-weight:800; text-align:center;">Request a Personalized Pipeline</h2>
-        <p style="text-align:center; color:var(--text-muted); margin-bottom: 32px;">Tell us about your requirements. Select the services you need, and our team will build a custom pipeline just for you.</p>
-        
-        <div id="alert-box" class="alert"></div>
-
-        <form id="customer-form">
-            <div class="form-group">
-                <label for="company_name">Company Name</label>
-                <input type="text" id="company_name" name="company_name" required placeholder="e.g. Acme Corp">
+    <!-- Link Modal -->
+    <div class="modal-overlay" id="link-modal">
+        <div class="modal">
+            <h2>Pipeline Ready!</h2>
+            <p style="color: var(--text-muted);">Your custom verification pipeline has been generated. Use the link below to integrate it into your application.</p>
+            <div class="link-box" id="generated-link">https://api.verifyyy.com/pipeline/...</div>
+            <div style="display: flex; gap: 16px;">
+                <button class="btn copy-btn" id="copy-btn" style="flex: 1;">Copy Link</button>
+                <button class="btn" id="preview-btn" style="flex: 1; background: var(--text-color);">Preview Flow</button>
             </div>
-
-            <div class="form-group">
-                <label for="contact_name">Primary Contact Name</label>
-                <input type="text" id="contact_name" name="contact_name" required placeholder="Jane Doe">
-            </div>
-
-            <div class="form-group">
-                <label for="contact_email">Work Email</label>
-                <input type="email" id="contact_email" name="contact_email" required placeholder="jane@acmecorp.com">
-            </div>
-
-            <div class="form-group">
-                <label for="industry">Industry</label>
-                <select id="industry" name="industry" required>
-                    <option value="" disabled selected>Select an industry...</option>
-                    <option value="Healthcare">Healthcare & Telemedicine</option>
-                    <option value="Fintech">Fintech & Banking</option>
-                    <option value="Insurance">Insurance</option>
-                    <option value="Gig Economy">Gig Economy & Marketplaces</option>
-                    <option value="Other">Other</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="expected_volume">Expected Monthly Verifications</label>
-                <select id="expected_volume" name="expected_volume" required>
-                    <option value="" disabled selected>Select expected volume...</option>
-                    <option value="< 1,000">Less than 1,000</option>
-                    <option value="1,000 - 10,000">1,000 - 10,000</option>
-                    <option value="10,000 - 100,000">10,000 - 100,000</option>
-                    <option value="100,000+">100,000+</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label>Desired Pipeline Services (Check all that apply)</label>
-                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
-                    <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; color: white;">
-                        <input type="checkbox" name="services" value="OCR" style="width: auto;"> Document OCR
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; color: white;">
-                        <input type="checkbox" name="services" value="Liveness" style="width: auto;"> Liveness Detection
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; color: white;">
-                        <input type="checkbox" name="services" value="CrossMatch" style="width: auto;"> Face & Data Cross-Matching
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; color: white;">
-                        <input type="checkbox" name="services" value="Fraud" style="width: auto;"> Fraud Detection
-                    </label>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label for="requirements">Specific Pipeline Requirements / Custom Logic (Optional)</label>
-                <textarea id="requirements" name="requirements" rows="4" placeholder="e.g., We need Liveness to happen before OCR, and if OCR fails, escalate to human review..."></textarea>
-            </div>
-
-            <button type="submit" class="btn" id="submit-btn" style="width: 100%; margin-top: 16px;">Request Pipeline</button>
-        </form>
+            <button class="btn btn-outline" id="close-modal" style="margin-top: 16px; width: 100%;">Close</button>
+        </div>
     </div>
 
     <script src="app.js"></script>
