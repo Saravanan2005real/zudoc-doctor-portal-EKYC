@@ -24,7 +24,6 @@ let currentConfigModuleId = null;
 const modal = document.getElementById('link-modal');
 const closeModalBtn = document.getElementById('close-modal');
 const copyBtn = document.getElementById('copy-btn');
-const previewBtn = document.getElementById('preview-btn');
 const generatedLinkEl = document.getElementById('generated-link');
 
 // Render Available Modules
@@ -205,7 +204,6 @@ generateBtn.addEventListener('click', () => {
         localStorage.setItem(`pipeline_${uuid}`, JSON.stringify(pipeline));
         
         generatedLinkEl.textContent = link;
-        previewBtn.dataset.uuid = uuid;
         modal.style.display = 'flex';
         
         generateBtn.textContent = 'Generate Link';
@@ -216,11 +214,6 @@ generateBtn.addEventListener('click', () => {
 // Modal Actions
 closeModalBtn.addEventListener('click', () => {
     modal.style.display = 'none';
-});
-
-previewBtn.addEventListener('click', () => {
-    const uuid = previewBtn.dataset.uuid;
-    window.open(`verify-session.html?id=${uuid}`, '_blank');
 });
 
 copyBtn.addEventListener('click', () => {
