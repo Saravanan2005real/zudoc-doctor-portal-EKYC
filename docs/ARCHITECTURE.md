@@ -15,6 +15,10 @@ flowchart LR
   Doctor[Doctor]
   Admin[Admin Reviewer]
   Portal[Doctor Web Portal<br/>public/]
+  B2BClient[B2B Client]
+  CustPortal[Pipeline Builder<br/>customer_portal :8084]
+  B2BEndUser[B2B End User]
+  B2BUI[B2B Portal<br/>b2b_portal :8082]
   API[FastAPI<br/>python_backend :8080]
   PG[(PostgreSQL)]
   OCR[In-process OCR<br/>ocr/engine]
@@ -26,10 +30,17 @@ flowchart LR
 
   Doctor --> Portal
   Admin --> Portal
+  B2BClient --> CustPortal
+  B2BEndUser --> B2BUI
+  CustPortal -.->|"Generates config"| B2BUI
   Portal --> API
+  B2BUI --> API
   Cam --> Portal
+  Cam --> B2BUI
   Portal --> Eye
+  B2BUI --> Eye
   Portal --> Live
+  B2BUI --> Live
   API --> PG
   API --> OCR
   Live --> OCR
@@ -57,6 +68,8 @@ flowchart LR
 flowchart TB
   subgraph Browser
     UI[public/ Doctor UI]
+    CUST[customer_portal / Pipeline Builder]
+    B2B[b2b_portal / End User]
     WG[WebGazer + Face Mesh]
     AUD[Audio guided liveness]
   end
@@ -78,10 +91,15 @@ flowchart TB
   DB[(PostgreSQL)]
 
   UI --> NGX
+  B2B --> NGX
+  CUST --> NGX
   NGX --> HTTP
   UI -->|local direct| HTTP
+  B2B -->|local direct| HTTP
   UI --> WG
+  B2B --> WG
   UI --> AUD
+  B2B --> AUD
   HTTP --> CTRL --> SVC
   SVC --> REPO --> DB
   SVC --> UP

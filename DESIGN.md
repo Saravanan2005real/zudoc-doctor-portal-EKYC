@@ -16,10 +16,10 @@ Goals:
 ## 2. High-level design
 
 ```
-Doctor / Admin UI (public/)
-        │
-        ▼
-   HTTP API (python_backend/main.py + controllers)
+Doctor / Admin UI (public/)       B2B End User UI (b2b_portal/)
+        │                                 │
+        ▼                                 ▼
+   HTTP API (python_backend/main.py + controllers)  ◄── Pipeline Builder (customer_portal/)
         │
    ┌────┴────┐
    │ Services│  ← auth, profile, documents, submission, admin review, analytics

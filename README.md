@@ -50,6 +50,8 @@ One FastAPI process serves the **portal UI**, **REST API**, and **OCR / live-fac
 flowchart TB
   subgraph Client["Browser + Webcam"]
     UI["Doctor Portal<br/>Steps 1–5 · public/"]
+    B2B["B2B End User<br/>b2b_portal/"]
+    CUST["Pipeline Builder<br/>customer_portal/"]
     WG["Step 4.2 Eye tracking<br/>WebGazer + Face Mesh"]
     AUD["Step 4.2 Audio guided<br/>speech + head / blink"]
     CAM["Webcam"]
@@ -71,12 +73,20 @@ flowchart TB
   PG[("PostgreSQL")]
 
   UI -->|HTTP| NGX
+  B2B -->|HTTP| NGX
+  CUST -->|HTTP| NGX
   NGX --> API
   UI -->|local direct| API
+  B2B -->|local direct| API
+  CUST -->|local direct| API
   CAM --> UI
+  CAM --> B2B
   UI --> WG
+  B2B --> WG
   UI --> AUD
+  B2B --> AUD
   UI -->|"Step 4.1 frame"| LIVE
+  B2B -->|"Step 4.1 frame"| LIVE
   API --> SVC
   SVC --> REPO --> PG
   SVC --> STORE
