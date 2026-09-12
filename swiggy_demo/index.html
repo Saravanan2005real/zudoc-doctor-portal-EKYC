@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Swiggy Partner Onboarding</title>
+    <!-- We'll use a generic sans-serif similar to Proxima Nova -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- App Container to simulate a mobile screen on desktop -->
+    <div class="mobile-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z" fill="#fc8019"/>
+                </svg>
+                <span>Partner App</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="app-content">
+            <h1 class="page-title">Welcome to Swiggy!</h1>
+            <p class="subtitle">Complete your profile to start delivering and earning.</p>
+
+            <div class="form-section">
+                <label>Full Name</label>
+                <input type="text" placeholder="e.g. Rahul Sharma" value="Rahul Sharma">
+                
+                <label>Vehicle Type</label>
+                <select>
+                    <option>2 Wheeler (Bike/Scooter)</option>
+                    <option>Bicycle</option>
+                </select>
+            </div>
+
+            <div class="kyc-section">
+                <h2>Mandatory KYC Check</h2>
+                <p>We need to verify your identity to comply with regulations. Keep your Aadhaar card ready.</p>
+                
+                <div class="link-input-group">
+                    <label style="font-size: 0.85rem; color: #7e808c; display: block; margin-bottom: 8px; font-weight: 600;">[Demo Only] Paste Verifyyy Pipeline Link Here:</label>
+                    <input type="text" id="verify-link-input" placeholder="https://verify.verifyyy.com/session?id=..." class="demo-input">
+                </div>
+
+                <button class="primary-btn" id="start-verification-btn">
+                    Start Aadhaar Verification
+                </button>
+                <p class="info-text">You will be securely redirected to our identity verification partner.</p>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
