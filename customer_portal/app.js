@@ -117,35 +117,35 @@ function openConfigModal(uniqueId) {
     if (!mod) return;
     
     currentConfigModuleId = uniqueId;
-    configModalTitle.textContent = \`Configure \${mod.name}\`;
+    configModalTitle.textContent = `Configure ${mod.name}`;
     
     let html = '<div class="config-group">';
     const c = mod.config || {};
     
     if (mod.id === 'ocr') {
-        html += \`
-            <label class="config-label"><input type="checkbox" id="cfg-aadhaar" \${c.aadhaar ? 'checked' : ''}> Aadhaar (UIDAI)</label>
-            <label class="config-label"><input type="checkbox" id="cfg-pan" \${c.pan ? 'checked' : ''}> PAN Card</label>
-            <label class="config-label"><input type="checkbox" id="cfg-passport" \${c.passport ? 'checked' : ''}> Passport</label>
-            <label class="config-label"><input type="checkbox" id="cfg-company" \${c.company ? 'checked' : ''}> Company Certificate</label>
-            <label class="config-label"><input type="checkbox" id="cfg-gst" \${c.gst ? 'checked' : ''}> GST Certificate</label>
-        \`;
+        html += `
+            <label class="config-label"><input type="checkbox" id="cfg-aadhaar" ${c.aadhaar ? 'checked' : ''}> Aadhaar (UIDAI)</label>
+            <label class="config-label"><input type="checkbox" id="cfg-pan" ${c.pan ? 'checked' : ''}> PAN Card</label>
+            <label class="config-label"><input type="checkbox" id="cfg-passport" ${c.passport ? 'checked' : ''}> Passport</label>
+            <label class="config-label"><input type="checkbox" id="cfg-company" ${c.company ? 'checked' : ''}> Company Certificate</label>
+            <label class="config-label"><input type="checkbox" id="cfg-gst" ${c.gst ? 'checked' : ''}> GST Certificate</label>
+        `;
     } else if (mod.id === 'liveness') {
-        html += \`
-            <label class="config-label"><input type="radio" name="cfg-live-mode" value="eye_tracking" \${c.mode === 'eye_tracking' ? 'checked' : ''}> Eye Tracking</label>
-            <label class="config-label"><input type="radio" name="cfg-live-mode" value="audio_guided" \${c.mode === 'audio_guided' ? 'checked' : ''}> Audio Guided</label>
-            <label class="config-label"><input type="radio" name="cfg-live-mode" value="video" \${c.mode === 'video' ? 'checked' : ''}> Passive Video</label>
-        \`;
+        html += `
+            <label class="config-label"><input type="radio" name="cfg-live-mode" value="eye_tracking" ${c.mode === 'eye_tracking' ? 'checked' : ''}> Eye Tracking</label>
+            <label class="config-label"><input type="radio" name="cfg-live-mode" value="audio_guided" ${c.mode === 'audio_guided' ? 'checked' : ''}> Audio Guided</label>
+            <label class="config-label"><input type="radio" name="cfg-live-mode" value="video" ${c.mode === 'video' ? 'checked' : ''}> Passive Video</label>
+        `;
     } else if (mod.id === 'cross_match') {
-        html += \`
-            <label class="config-label"><input type="checkbox" id="cfg-match-face" \${c.match_face ? 'checked' : ''}> Match Face (ID vs Selfie)</label>
-            <label class="config-label"><input type="checkbox" id="cfg-match-name" \${c.match_name ? 'checked' : ''}> Match Name (ID vs Profile)</label>
-        \`;
+        html += `
+            <label class="config-label"><input type="checkbox" id="cfg-match-face" ${c.match_face ? 'checked' : ''}> Match Face (ID vs Selfie)</label>
+            <label class="config-label"><input type="checkbox" id="cfg-match-name" ${c.match_name ? 'checked' : ''}> Match Name (ID vs Profile)</label>
+        `;
     } else if (mod.id === 'fraud_analysis') {
-        html += \`
-            <label class="config-label"><input type="checkbox" id="cfg-deep-scan" \${c.deep_scan ? 'checked' : ''}> Deep Scan (Tampering)</label>
-            <label class="config-label"><input type="checkbox" id="cfg-synthetic" \${c.synthetic_check ? 'checked' : ''}> Synthetic Media Check (Deepfake)</label>
-        \`;
+        html += `
+            <label class="config-label"><input type="checkbox" id="cfg-deep-scan" ${c.deep_scan ? 'checked' : ''}> Deep Scan (Tampering)</label>
+            <label class="config-label"><input type="checkbox" id="cfg-synthetic" ${c.synthetic_check ? 'checked' : ''}> Synthetic Media Check (Deepfake)</label>
+        `;
     }
     
     html += '</div>';
