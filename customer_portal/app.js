@@ -197,7 +197,8 @@ generateBtn.addEventListener('click', () => {
     generateBtn.disabled = true;
 
     setTimeout(() => {
-        const uuid = crypto.randomUUID ? crypto.randomUUID() : 'req-' + Date.now();
+        const fallbackId = 'req-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+        const uuid = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : fallbackId;
         const link = `https://verify.verifyyy.com/session?id=${uuid}`;
         
         // Save pipeline config to localStorage for the preview session
