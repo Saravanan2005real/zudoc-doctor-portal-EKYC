@@ -14,11 +14,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Change button state
         startBtn.textContent = 'Verifying...';
         startBtn.disabled = true;
-        // The exact production endpoint required for the swiggy integration
-        const verifyEndpoint = 'https://verify.verifyyy.com/session?id=966e03d0-d0ff-4ee3-806f-8b32be191434';
+        // Pointing to local python backend for testing the real system
+        const verifyEndpoint = 'http://localhost:8080/session?id=966e03d0-d0ff-4ee3-806f-8b32be191434';
 
         try {
-            // Hit the production verification service
+            // Hit the verification service
             const response = await fetch(verifyEndpoint, {
                 method: 'POST',
                 headers: {
