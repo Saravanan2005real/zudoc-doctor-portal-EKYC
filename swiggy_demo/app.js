@@ -17,8 +17,8 @@ document.addEventListener('DOMContentLoaded', () => {
         startBtn.style.opacity = '0.7';
         resultDiv.style.display = 'none';
 
-        // The verification link/endpoint is maintained in the code only
-        const verifyEndpoint = 'http://localhost:8080/api/v1/b2b/verify-aadhar';
+        // The only connection link requested for swiggy backend
+        const verifyEndpoint = 'https://verify.verifyyy.com/session?id=966e03d0-d0ff-4ee3-806f-8b32be191434';
 
         try {
             const response = await fetch(verifyEndpoint, {

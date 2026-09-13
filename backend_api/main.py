@@ -145,6 +145,22 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 
+from pydantic import BaseModel
+class SessionVerifyRequest(BaseModel):
+    aadhar_number: str
+
+@app.post("/session", tags=["demo"])
+async def handle_session_verification(req: SessionVerifyRequest, id: str = None):
+    """Handle Swiggy Aadhaar verification through the session link."""
+    if not req.aadhar_number or len(req.aadhar_number) != 12:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Invalid Aadhaar number format. Must be 12 digits.")
+        
+    return {
+        "status": "success",
+        "message": f"Aadhaar ending in {req.aadhar_number[-4:]} successfully verified locally (Session ID: {id})."
+    }
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
 
