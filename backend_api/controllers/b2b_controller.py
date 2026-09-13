@@ -32,6 +32,9 @@ class CompanyRequestSubmit(BaseModel):
 class ApproveRequest(BaseModel):
     pass
 
+class AadharVerifyRequest(BaseModel):
+    aadhar_number: str
+
 # ---- Public Routes ----
 
 @router.post("/requests")
@@ -49,6 +52,19 @@ def submit_company_request(req: CompanyRequestSubmit, db: Session = Depends(get_
     db.commit()
     db.refresh(new_req)
     return {"status": "success", "message": "Request submitted successfully. Our team will review it shortly.", "request_id": new_req.id}
+
+@router.post("/verify-aadhar")
+def verify_aadhar_locally(req: AadharVerifyRequest):
+    """Locally verify an Aadhaar number for Swiggy Demo."""
+    # Simple validation for demo
+    if len(req.aadhar_number) != 12 or not req.aadhar_number.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid Aadhaar number format. Must be 12 digits.")
+    
+    # Simulate a local verification check
+    return {
+        "status": "success",
+        "message": f"Aadhaar number ending in {req.aadhar_number[-4:]} has been successfully verified."
+    }
 
 # ---- Admin Routes ----
 

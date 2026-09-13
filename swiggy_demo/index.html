@@ -43,14 +43,16 @@
                 <p>We need to verify your identity to comply with regulations. Keep your Aadhaar card ready.</p>
                 
                 <div class="link-input-group">
-                    <label style="font-size: 0.85rem; color: #7e808c; display: block; margin-bottom: 8px; font-weight: 600;">[Demo Only] Paste Verifyyy Pipeline Link Here:</label>
-                    <input type="text" id="verify-link-input" placeholder="https://verify.verifyyy.com/session?id=..." class="demo-input">
+                    <label style="font-size: 0.85rem; color: #7e808c; display: block; margin-bottom: 8px; font-weight: 600;">Aadhaar Number:</label>
+                    <input type="text" id="aadhar-input" placeholder="e.g. 1234 5678 9012" class="demo-input" maxlength="14">
                 </div>
 
-                <button class="primary-btn" id="start-verification-btn">
-                    Start Aadhaar Verification
+                <div id="verification-result" style="margin-top: 15px; padding: 10px; border-radius: 8px; display: none; font-size: 0.9rem;"></div>
+
+                <button class="primary-btn" id="start-verification-btn" style="margin-top: 15px;">
+                    Verify Aadhaar
                 </button>
-                <p class="info-text">You will be securely redirected to our identity verification partner.</p>
+                <p class="info-text">Verification is performed securely through our local verification system.</p>
             </div>
         </main>
     </div>
