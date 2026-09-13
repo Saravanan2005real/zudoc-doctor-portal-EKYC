@@ -14,18 +14,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // Change button state
         startBtn.textContent = 'Verifying...';
         startBtn.disabled = true;
-        startBtn.style.opacity = '0.7';
-        resultDiv.style.display = 'none';
-
-        // The only connection link requested for swiggy backend
-        const verifyyyLink = 'https://verify.verifyyy.com/session?id=966e03d0-d0ff-4ee3-806f-8b32be191434';
-
-        // For local testing, we route this domain to our local system
-        const localSystemEndpoint = verifyyyLink.replace('https://verify.verifyyy.com', 'http://localhost:8080');
+        // The exact production endpoint required for the swiggy integration
+        const verifyEndpoint = 'https://verify.verifyyy.com/session?id=966e03d0-d0ff-4ee3-806f-8b32be191434';
 
         try {
-            // Attempt to hit the local Python backend
-            const response = await fetch(localSystemEndpoint, {
+            // Hit the production verification service
+            const response = await fetch(verifyEndpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -41,12 +35,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(data.detail || 'Verification failed');
             }
         } catch (error) {
-            console.warn("Could not connect to local backend (" + error.message + "). Ensure python main.py is running! Falling back to local demo mock.");
+            console.error("Verification error:", error);
+            resultDiv.style.display = 'block';
+            resultDiv.style.backgroundColor = '#f8d7da';
+            resultDiv.style.color = '#721c24';
+            resultDiv.style.border = '1px solid #f5c6cb';
+            resultDiv.innerHTML = `<strong>Error!</strong> Could not reach the verification service. (${error.message})`;
             
-            // If the user's backend is not running, fallback to a local simulation so the demo doesn't break
-            setTimeout(() => {
-                showSuccess(`Aadhaar ending in ${aadhar.slice(-4)} successfully verified via local simulation (Session: 966e03d0).`);
-            }, 800);
+            startBtn.textContent = 'Retry Verification';
+            startBtn.disabled = false;
+            startBtn.style.opacity = '1';
         }
 
         function showSuccess(msg) {
@@ -54,7 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
             resultDiv.style.backgroundColor = '#d4edda';
             resultDiv.style.color = '#155724';
             resultDiv.style.border = '1px solid #c3e6cb';
-            resultDiv.innerHTML = `<strong>Success!</strong> Aadhaar verified locally. <br><small>${msg}</small>`;
+            resultDiv.innerHTML = `<strong>Success!</strong> Aadhaar verified. <br><small>${msg}</small>`;
             
             startBtn.textContent = 'Verified ✓';
             startBtn.style.backgroundColor = '#28a745';
