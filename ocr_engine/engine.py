@@ -47,11 +47,6 @@ os.environ['FLAGS_use_mkldnn'] = '0'
 os.environ['PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT'] = '0'
 os.environ['FLAGS_enable_pir_api'] = '0'
 os.environ['FLAGS_enable_pir_in_executor'] = '0'
-# RetinaFace builds its model with the Keras 2 functional API. On TF 2.21 the
-# default `tf.keras` is Keras 3, which rejects it with "A KerasTensor cannot be
-# used as input to a TensorFlow function" and silently kills all face
-# extraction. Pinning tf.keras to the tf_keras (Keras 2) shim fixes detection.
-os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')
 # Suppress TensorFlow C++ logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'

@@ -93,28 +93,37 @@
     </nav>
 
     <div class="demo-container">
-        <h2 style="margin-bottom: 16px; font-weight: 800;">Demo: OCR and Live Face Detection</h2>
-        <p style="color: var(--text-muted); margin-bottom: 24px;">Hold your Aadhaar or PAN next to your face, then capture. The system will extract your ID details and ensure a live person is holding it.</p>
+        <h2 style="margin-bottom: 16px; font-weight: 800;">Demo: Multi-Step eKYC Verification</h2>
+        <p style="color: var(--text-muted); margin-bottom: 24px;">Step 1: Upload your Aadhaar or PAN. Step 2: Perform a live capture to cross-verify the document and your face.</p>
         
-        <div class="live-id-video-wrap" id="live-id-video-card">
-            <video id="live-id-webcam" autoplay playsinline></video>
-            <div id="live-id-tick" class="live-id-tick hidden">
-                <div class="tick-circle">✓</div>
-                <div class="tick-label">ID hold captured</div>
+        <!-- Step 1: Upload -->
+        <div id="step1-upload-section" style="border: 1px solid var(--border-color); padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+            <h3 style="margin-top: 0;">Step 1: Upload Identity Document</h3>
+            <input type="file" id="doc-upload" accept="image/*" style="margin-bottom: 12px; display: block; width: 100%;">
+            <button class="btn" id="btn-process-upload" type="button" style="width:100%;">Process Uploaded Document</button>
+            <div id="upload-spinner" class="hidden" style="margin-top: 12px; color: var(--accent-color); font-weight: bold;">Extracting details...</div>
+            <div id="upload-results" class="result-panel hidden"></div>
+        </div>
+
+        <!-- Step 2: Live Capture -->
+        <div id="step2-live-section" style="border: 1px solid var(--border-color); padding: 16px; border-radius: 12px; opacity: 0.4; pointer-events: none;">
+            <h3 style="margin-top: 0;">Step 2: Live Verification</h3>
+            <p style="font-size: 0.9rem; color: var(--text-muted);">Look straight into the camera to capture your face.</p>
+            <div class="live-id-video-wrap" id="live-id-video-card">
+                <video id="live-id-webcam" autoplay playsinline></video>
+                <div id="live-id-tick" class="live-id-tick hidden">
+                    <div class="tick-circle">✓</div>
+                    <div class="tick-label">Capture successful</div>
+                </div>
             </div>
+            <button class="btn" id="btn-capture-live-id" type="button" style="width:100%; max-width: 560px;">Capture ID & Face</button>
+            <canvas id="live-id-canvas" class="hidden"></canvas>
+            
+            <div id="loading-spinner" class="hidden" style="margin-top: 24px; color: var(--accent-color); font-weight: bold;">Processing Cross-Verification...</div>
+            <div id="result-panel" class="result-panel hidden"></div>
+            <button class="btn btn-outline hidden" id="btn-retry" type="button" style="margin-top: 24px; width: 100%; max-width: 560px;">Retry Step 2</button>
         </div>
-        <button class="btn" id="btn-capture-live-id" type="button" style="width:100%; max-width: 560px;">Capture ID & Face</button>
-        <canvas id="live-id-canvas" class="hidden"></canvas>
 
-        <div id="loading-spinner" class="hidden" style="margin-top: 24px; color: var(--accent-color); font-weight: bold;">
-            Processing...
-        </div>
-
-        <div id="result-panel" class="result-panel hidden">
-            <!-- Results injected here -->
-        </div>
-        
-        <button class="btn btn-outline hidden" id="btn-retry" type="button" style="margin-top: 24px; width: 100%; max-width: 560px;">Retry Capture</button>
     </div>
 
     <script src="demo_ocr_face.js?v=3"></script>
