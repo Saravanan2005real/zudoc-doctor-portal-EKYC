@@ -60,7 +60,7 @@ async def live_doc_ocr(req: LiveDocRequest):
     
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post("http://ocr_engine:5001/api/v1/live_verify", json=payload, timeout=30.0)
+            resp = await client.post("http://ocr_engine:5001/api/v1/live_verify", json=payload, timeout=180.0)
             code = resp.status_code
             data = resp.json()
     except Exception as e:

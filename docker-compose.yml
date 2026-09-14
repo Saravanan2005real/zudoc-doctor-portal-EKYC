@@ -30,7 +30,10 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - ./ocr_uploads:/app/ocr_uploads
+      - ./ocr_uploads:/ocr_uploads
+      - ./model_cache/deepface:/root/.deepface
+      - ./model_cache/paddlex:/root/.paddlex
+      - ./model_cache/huggingface:/root/.cache/huggingface
 
   postgres:
     image: postgres:15-alpine
@@ -84,6 +87,7 @@ services:
       - backend_api
 
   accessibility_frontend:
+    profiles: ["optional"]
     build:
       context: ./accessibility_frontend
       dockerfile: Dockerfile

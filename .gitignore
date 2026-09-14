@@ -34,3 +34,5 @@ eye tracker/
 # Torch / ML caches
 .cache/
 **/__pycache__/
+model_cache/
+ocr_uploads/

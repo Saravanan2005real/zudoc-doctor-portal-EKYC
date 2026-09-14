@@ -25,7 +25,7 @@ async def run_ocr(
     
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(f"{OCR_SERVICE_URL}/api/v1/ocr", files=files, data=data, timeout=30.0)
+            resp = await client.post(f"{OCR_SERVICE_URL}/api/v1/ocr", files=files, data=data, timeout=300.0)
             return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"OCR Engine unreachable: {e}")
@@ -35,7 +35,7 @@ async def live_verify(request: Request):
     payload = await request.json()
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(f"{OCR_SERVICE_URL}/api/v1/live_verify", json=payload, timeout=30.0)
+            resp = await client.post(f"{OCR_SERVICE_URL}/api/v1/live_verify", json=payload, timeout=300.0)
             return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"OCR Engine unreachable: {e}")
@@ -45,7 +45,7 @@ async def live_face_check(request: Request):
     payload = await request.json()
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(f"{OCR_SERVICE_URL}/api/v1/live_face_check", json=payload, timeout=30.0)
+            resp = await client.post(f"{OCR_SERVICE_URL}/api/v1/live_face_check", json=payload, timeout=300.0)
             return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"OCR Engine unreachable: {e}")

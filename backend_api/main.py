@@ -142,6 +142,13 @@ app.include_router(b2b_router)
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
+os.makedirs("ocr_uploads", exist_ok=True)
+app.mount("/ocr_uploads", StaticFiles(directory="ocr_uploads"), name="ocr_uploads")
+
+frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend_portal"))
+if os.path.exists(frontend_dir):
+    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend_portal")
+
 
 
 

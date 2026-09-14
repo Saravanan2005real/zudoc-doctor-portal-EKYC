@@ -35,7 +35,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initStep3Vault();
   initStep4Pipeline();
   initStep5Prescription();
-  initAdminPortal();
 
   // Start at Step 1
   goToStep(1);
@@ -52,10 +51,6 @@ function initNavigation() {
       tab.classList.add('active');
       const targetView = document.getElementById(tab.dataset.tab);
       if (targetView) targetView.classList.add('active');
-
-      if (tab.dataset.tab === 'admin-view') {
-        fetchAdminAnalytics();
-      }
     });
   });
 }
@@ -1582,8 +1577,8 @@ async function step7Blink() {
 // spoken prompts ask for head turns and blinks, which are measured from the
 // MediaPipe face mesh.
 
-const AUDIO_YAW_THRESHOLD = 0.16;
-const AUDIO_TURN_TIMEOUT_MS = 12000;
+const AUDIO_YAW_THRESHOLD = 0.10;
+const AUDIO_TURN_TIMEOUT_MS = 14000;
 const AUDIO_BLINK_TARGET = 2;
 const AUDIO_BLINK_TIMEOUT_MS = 14000;
 
@@ -1628,10 +1623,47 @@ const chime = {
   next: () => playTone(560, 120),
 };
 
+// Robust yaw estimation directly from face mesh geometry:
+// Does NOT require iris landmarks (works with standard 468 landmarks)
+// Combines nose-eye projection with lateral cheek distance asymmetry
 function currentYaw() {
-  if (!mesh.landmarks) return null;
-  const f = meshFeatures(mesh.landmarks);
-  return f ? f[5] : null;
+  if (!mesh.landmarks || mesh.landmarks.length < 468) return null;
+  const lm = mesh.landmarks;
+  const nose = lm[1];     // Tip of nose
+  const lOuter = lm[33];   // Outer eye corner (viewer left)
+  const rOuter = lm[263];  // Outer eye corner (viewer right)
+  if (!nose || !lOuter || !rOuter) return null;
+
+  // Eye-nose horizontal offset normalized by eye span
+  const midEyeX = (lOuter.x + rOuter.x) / 2;
+  const iod = Math.max(1e-4, Math.hypot(rOuter.x - lOuter.x, rOuter.y - lOuter.y));
+  const eyeYaw = (nose.x - midEyeX) / iod;
+
+  // Cheek asymmetry: distance from nose tip to each cheek boundary
+  const lCheek = lm[234];
+  const rCheek = lm[454];
+  if (lCheek && rCheek) {
+    const dLeft = Math.hypot(nose.x - lCheek.x, nose.y - lCheek.y);
+    const dRight = Math.hypot(nose.x - rCheek.x, nose.y - rCheek.y);
+    const cheekYaw = (dRight - dLeft) / Math.max(1e-4, dRight + dLeft);
+    const combined = 0.5 * eyeYaw + 0.5 * cheekYaw;
+    return Number.isFinite(combined) ? combined : eyeYaw;
+  }
+  return Number.isFinite(eyeYaw) ? eyeYaw : null;
+}
+
+// Calibrates baseline resting yaw over time to prevent single-frame spikes
+async function measureBaselineYaw(durationMs = 700) {
+  const samples = [];
+  const t0 = performance.now();
+  while (performance.now() - t0 < durationMs) {
+    const y = currentYaw();
+    if (y != null && Number.isFinite(y)) samples.push(y);
+    await wait(30);
+  }
+  return samples.length > 0
+    ? samples.reduce((a, b) => a + b, 0) / samples.length
+    : (currentYaw() ?? 0);
 }
 
 function announce(instruction, status) {
@@ -1667,19 +1699,35 @@ function waitForHeadTurn(baseline, forbidSign, timeoutMs) {
       if (yaw != null) {
         const delta = yaw - baseline;
         const sign = Math.sign(delta);
-        if (!turned && Math.abs(delta) >= AUDIO_YAW_THRESHOLD && sign !== forbidSign) {
-          turned = true;
-          peak = Math.abs(delta);
-          peakSign = sign;
-          chime.next();
-          announce(null, 'Good — now return to centre');
-          speak('Good. Now face forward again.');
-        } else if (turned && Math.abs(delta) < AUDIO_YAW_THRESHOLD * 0.45) {
+
+        if (!turned) {
+          // Check if head turned sufficiently from baseline in permitted direction
+          if (Math.abs(delta) >= AUDIO_YAW_THRESHOLD && (forbidSign === 0 || sign !== forbidSign)) {
+            turned = true;
+            peak = Math.abs(delta);
+            peakSign = sign;
+            chime.next();
+            announce('Good turn detected! Now return to the centre.', 'Turn detected — Face forward');
+            speak('Good. Now face forward again.');
+          }
+        } else {
+          // Track peak amplitude while turned
+          if (Math.abs(delta) > peak) peak = Math.abs(delta);
+
+          // Return to centre is satisfied when delta returns close to baseline
+          if (Math.abs(delta) <= AUDIO_YAW_THRESHOLD * 0.50) {
+            resolve({ ok: true, sign: peakSign, peak });
+            return;
+          }
+        }
+      }
+
+      if (performance.now() - t0 >= timeoutMs) {
+        // If a strong turn was detected and user returned substantially, resolve as success
+        if (turned && peak >= AUDIO_YAW_THRESHOLD * 1.1) {
           resolve({ ok: true, sign: peakSign, peak });
           return;
         }
-      }
-      if (performance.now() - t0 >= timeoutMs) {
         resolve({ ok: false, sign: peakSign, peak });
         return;
       }
@@ -1769,18 +1817,19 @@ async function runAudioLivenessPipeline() {
       await wait(2500);
     } else {
       chime.ok();
-      announce('Hold still for a moment.', 'Face found');
-      speak('Thank you, I can see you. Hold still.');
-      await wait(1500);
+      announce('Hold still facing the camera.', 'Calibrating center position…');
+      speak('Thank you, I can see you. Hold still facing forward.');
+      await wait(1200);
     }
 
-    const baseline = currentYaw() ?? 0;
+    // Measure stable baseline yaw across multiple frames
+    const baseline1 = await measureBaselineYaw(800);
 
-    // Turn one
+    // Turn one: accept left or right
     renderAudioSteps(3, 0, 0);
-    announce('Slowly turn your head to your left, then back to the centre.', 'Waiting for a head turn');
-    speak('Slowly turn your head to your left, then bring it back to the centre.');
-    const turn1 = await waitForHeadTurn(baseline, 0, AUDIO_TURN_TIMEOUT_MS);
+    announce('Slowly turn your head to your left or right, then back to the centre.', 'Waiting for a head turn');
+    speak('Slowly turn your head to your left or right, then bring it back to the centre.');
+    const turn1 = await waitForHeadTurn(baseline1, 0, AUDIO_TURN_TIMEOUT_MS);
     checks[1].passed = turn1.ok;
     if (turn1.ok) {
       chime.ok();
@@ -1791,12 +1840,17 @@ async function runAudioLivenessPipeline() {
       renderAudioSteps(3, 0, 1);
       speak('I did not detect that turn. Let us continue.');
     }
-    await wait(900);
+    await wait(1000);
 
-    // Turn two, in the opposite direction to whatever was detected first
-    announce('Now turn your head to your right, then back to the centre.', 'Waiting for the other side');
-    speak('Now turn your head to your right, then back to the centre.');
-    const turn2 = await waitForHeadTurn(baseline, turn1.ok ? turn1.sign : 0, AUDIO_TURN_TIMEOUT_MS);
+    // Re-center baseline before Turn 2
+    announce('Face forward for the next check.', 'Centering…');
+    const baseline2 = await measureBaselineYaw(500);
+
+    // Turn two: require opposite direction to whatever was detected in turn 1
+    const promptSide = turn1.ok ? 'the other side' : 'your right';
+    announce(`Now turn your head to ${promptSide}, then back to the centre.`, 'Waiting for opposite turn');
+    speak(`Now turn your head to ${promptSide}, then back to the centre.`);
+    const turn2 = await waitForHeadTurn(baseline2, turn1.ok ? turn1.sign : 0, AUDIO_TURN_TIMEOUT_MS);
     checks[2].passed = turn2.ok;
     if (turn2.ok) {
       chime.ok();
@@ -1806,7 +1860,7 @@ async function runAudioLivenessPipeline() {
       chime.fail();
       speak('I did not detect that turn. Moving on.');
     }
-    await wait(900);
+    await wait(1000);
 
     // Blinks
     announce('Please blink twice, slowly.', 'Waiting for two blinks');
@@ -2386,119 +2440,6 @@ function initStep5Prescription() {
       alert(`Prescription Error: ${err.message}`);
     }
   });
-}
-
-// -------------------------------------------------------------
-// ADMIN PORTAL
-// -------------------------------------------------------------
-function initAdminPortal() {
-  document.getElementById('btn-admin-refresh').addEventListener('click', fetchAdminAnalytics);
-  document.getElementById('btn-admin-search').addEventListener('click', performAdminSearch);
-  document.getElementById('btn-close-inspector').addEventListener('click', () => {
-    document.getElementById('admin-inspector-card').classList.add('hidden');
-  });
-
-  document.getElementById('btn-action-approve').addEventListener('click', () => handleAdminAction('approve'));
-  document.getElementById('btn-action-reject').addEventListener('click', () => handleAdminAction('reject'));
-  document.getElementById('btn-action-req-docs').addEventListener('click', () => handleAdminAction('request-documents'));
-}
-
-async function fetchAdminAnalytics() {
-  try {
-    const resp = await fetch(`${API_BASE}/api/v1/admin/analytics`);
-    const data = await resp.json();
-
-    document.getElementById('metric-total-docs').innerText = data.total_doctors || 0;
-    document.getElementById('metric-pending-verifications').innerText = data.pending_verifications || 0;
-    document.getElementById('metric-verified-rate').innerText = (data.auto_verified_rate || 0).toFixed(1) + '%';
-    document.getElementById('metric-dlq-count').innerText = data.dead_letter_jobs || 0;
-
-    performAdminSearch();
-  } catch (err) {
-    console.error('Admin analytics fetch failed:', err);
-  }
-}
-
-async function performAdminSearch() {
-  const query = document.getElementById('admin-search-input').value;
-  try {
-    const resp = await fetch(`${API_BASE}/api/v1/admin/search?q=${encodeURIComponent(query)}`);
-    const doctors = await resp.json();
-
-    const tbody = document.getElementById('admin-verifications-tbody');
-    if (!doctors || doctors.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="6" class="text-center py-3 text-muted">No doctor records found.</td></tr>`;
-      return;
-    }
-
-    let html = '';
-    doctors.forEach(doc => {
-      const badgeClass = doc.status === 'VERIFIED' || doc.status === 'AUTO_VERIFIED' ? 'badge-success' : (doc.status === 'PENDING' ? 'badge-warning' : 'badge-secondary');
-      html += `<tr>
-        <td><strong>${doc.first_name} ${doc.last_name}</strong></td>
-        <td><code>${doc.public_id.substring(0, 10)}...</code></td>
-        <td>${doc.mobile}</td>
-        <td><span class="badge ${badgeClass}">${doc.status}</span></td>
-        <td>${doc.fraud_score} / 100</td>
-        <td>
-          <button class="btn btn-outline btn-sm" onclick="inspectDoctorDetail('${doc.public_id}')">Inspect & Review</button>
-        </td>
-      </tr>`;
-    });
-    tbody.innerHTML = html;
-  } catch (err) {
-    console.error('Admin search failed:', err);
-  }
-}
-
-window.inspectDoctorDetail = async function(doctorPublicID) {
-  try {
-    state.inspectingDoctorID = doctorPublicID;
-    const resp = await fetch(`${API_BASE}/api/v1/admin/verifications/detail?doctor_id=${doctorPublicID}`);
-    const data = await resp.json();
-
-    document.getElementById('admin-inspector-card').classList.remove('hidden');
-    document.getElementById('insp-doc-id').innerText = data.doctor.public_id;
-    document.getElementById('insp-doc-name').innerText = `${data.doctor.first_name} ${data.doctor.last_name}`;
-
-    const lic = data.licenses && data.licenses.length > 0 ? data.licenses[0] : null;
-    document.getElementById('insp-doc-reg-num').innerText = lic ? lic.registration_number : 'N/A';
-    document.getElementById('insp-doc-council').innerText = lic ? lic.registration_council : 'N/A';
-
-    document.getElementById('insp-registry-name').innerText = lic ? `${data.doctor.first_name} ${data.doctor.last_name} (NMC Verified)` : 'N/A';
-    document.getElementById('insp-registry-status').innerText = 'ACTIVE / VALID';
-    document.getElementById('insp-match-score').innerText = '100% Match';
-    document.getElementById('insp-fraud-score').innerText = `${data.doctor.fraud_score} / 100`;
-
-  } catch (err) {
-    alert(`Inspector error: ${err.message}`);
-  }
-};
-
-async function handleAdminAction(actionType) {
-  if (!state.inspectingDoctorID) return;
-
-  try {
-    const url = `${API_BASE}/api/v1/admin/verifications/${actionType}`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        doctor_id: state.inspectingDoctorID,
-        admin_id: '00000000-0000-0000-0000-000000000001',
-        reason: `Admin operation: ${actionType.toUpperCase()}`,
-      }),
-    });
-
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || 'Action failed');
-
-    alert(`Action ${actionType.toUpperCase()} completed successfully!`);
-    fetchAdminAnalytics();
-    document.getElementById('admin-inspector-card').classList.add('hidden');
-  } catch (err) {
-    alert(`Admin Action Error: ${err.message}`);
-  }
 }
 
 window.deleteDocument = async function(docId) {

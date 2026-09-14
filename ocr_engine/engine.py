@@ -42,8 +42,11 @@ class TorchMockFinder:
 sys.meta_path.insert(0, TorchMockFinder())
 _TORCH_MOCK_FINDER = sys.meta_path[0]
 
-# Disable oneDNN/MKLDNN to prevent the PIR implementation bug on CPU
+# Disable oneDNN/MKLDNN and PIR to prevent ConvertPirAttribute2RuntimeAttribute bug on CPU
 os.environ['FLAGS_use_mkldnn'] = '0'
+os.environ['PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT'] = '0'
+os.environ['FLAGS_enable_pir_api'] = '0'
+os.environ['FLAGS_enable_pir_in_executor'] = '0'
 # RetinaFace builds its model with the Keras 2 functional API. On TF 2.21 the
 # default `tf.keras` is Keras 3, which rejects it with "A KerasTensor cannot be
 # used as input to a TensorFlow function" and silently kills all face
@@ -52,10 +55,14 @@ os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')
 # Suppress TensorFlow C++ logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-# Skip CUDA discovery on Windows (avoids: "Could not find files for the given pattern(s).")
-os.environ.setdefault('CUDA_VISIBLE_DEVICES', '-1')
-os.environ.setdefault('NVIDIA_VISIBLE_DEVICES', 'void')
-os.environ.setdefault('FLAGS_use_gpu', '0')
+import platform
+if platform.system() == "Windows":
+    # Skip CUDA discovery on Windows (avoids: "Could not find files for the given pattern(s).")
+    os.environ.setdefault('CUDA_VISIBLE_DEVICES', '-1')
+    os.environ.setdefault('NVIDIA_VISIBLE_DEVICES', 'void')
+    os.environ.setdefault('FLAGS_use_gpu', '0')
+else:
+    os.environ.setdefault('FLAGS_use_gpu', '1')
 
 # Windows `where nvcc` / CUDA glob prints to the real console, bypassing Python stdout.
 import subprocess as _subprocess
@@ -111,6 +118,16 @@ try:
     # YOLO's torch mock can leave import state messy; load faces first.
     try:
         import tensorflow as _tf  # noqa: F401
+        try:
+            _gpus = _tf.config.list_physical_devices('GPU')
+            if _gpus:
+                for _g in _gpus:
+                    _tf.config.experimental.set_memory_growth(_g, True)
+                _sup_out.write(f"[GPU] TensorFlow detected GPU: {_gpus}\n")
+            else:
+                _sup_out.write("[GPU] TensorFlow running on CPU (no GPU visible)\n")
+        except Exception as _ge:
+            _sup_out.write(f"[GPU] TensorFlow GPU init: {_ge}\n")
         # Touch keras so tensorflow.keras submodule path resolves for RetinaFace.
         from tensorflow.keras.models import Model as _KerasModel  # noqa: F401
     except Exception as e:
@@ -135,7 +152,7 @@ finally:
     os.system = _orig_system
     captured = (_sup_err.getvalue() or "") + (_sup_out.getvalue() or "")
     for line in (captured or "").splitlines():
-        if "RetinaFace" in line or "DeepFace" in line or "TensorFlow preload" in line:
+        if "RetinaFace" in line or "DeepFace" in line or "TensorFlow preload" in line or "[GPU]" in line:
             print(line, file=sys.stderr)
     fatal = any(k in captured.lower() for k in ("traceback", "error:", "exception"))
     if fatal and ("RetinaFace load failed" in captured or "DeepFace load failed" in captured):
@@ -1037,8 +1054,28 @@ STEP2_HTML_TEMPLATE = """
 </html>
 """
 
-# Initialize PaddleOCR (downloads models on first run)
-# lang="en" is standard for Aadhaar cards as name, DOB, number are printed in English.
+# Initialize PaddleOCR (auto-detects CUDA GPU with graceful CPU fallback)
+_paddle_use_gpu = False
+try:
+    if paddle.device.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
+        _paddle_use_gpu = True
+        print(f"[GPU] PaddleOCR running on GPU: {paddle.device.get_device()}", flush=True)
+    else:
+        print("[GPU] PaddleOCR running in CPU mode (no GPU detected)", flush=True)
+except Exception as _pe:
+    print(f"[GPU] Paddle device check fallback to CPU: {_pe}", flush=True)
+
+if _paddle_use_gpu:
+    try:
+        paddle.set_device("gpu")
+    except Exception:
+        paddle.set_device("cpu")
+else:
+    try:
+        paddle.set_device("cpu")
+    except Exception:
+        pass
+
 ocr = PaddleOCR(use_textline_orientation=True, lang="en", enable_mkldnn=False)
 
 
@@ -2818,7 +2855,7 @@ def live_verify_api():
                 _resolve_upload_face_path(id_filename),
             )
 
-        from ocr.quality import assess_live_frame, ocr_fields_usable
+        from quality import assess_live_frame, ocr_fields_usable
         quality = assess_live_frame(img)
         missing = []
         if not warped_ok and not ocr_fields_usable(parsed_fields):
@@ -2899,7 +2936,7 @@ def live_face_check_api():
             if not _save_jpg(os.path.join(app.config['UPLOAD_FOLDER'], id_filename), id_face):
                 id_filename = None
 
-        from ocr.quality import assess_live_frame
+        from quality import assess_live_frame
         quality = assess_live_frame(img)
 
         person_detected = holder_face is not None

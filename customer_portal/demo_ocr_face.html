@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verifyyy - Demo OCR & Live Face Detection</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .demo-container {
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 24px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            text-align: center;
+        }
+        .live-id-video-wrap {
+            position: relative;
+            width: 100%;
+            max-width: 560px;
+            margin: 0 auto 16px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+        }
+        video {
+            width: 100%;
+            display: block;
+            transform: scaleX(-1);
+        }
+        .live-id-tick {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(16, 185, 129, 0.9);
+            color: #fff;
+            padding: 16px 24px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .tick-circle {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .hidden { display: none !important; }
+        .result-panel {
+            margin-top: 24px;
+            padding: 16px;
+            background: rgba(45, 212, 191, 0.05);
+            border: 1px solid rgba(45, 212, 191, 0.2);
+            border-radius: 12px;
+            text-align: left;
+        }
+        .result-panel h4 { margin-top: 0; margin-bottom: 12px; color: var(--accent-color); font-size: 1.1rem; }
+        .result-panel p { margin: 8px 0; font-size: 0.95rem; }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: bold;
+        }
+        .badge-success { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+        .badge-danger { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .face-images {
+            display: flex;
+            gap: 16px;
+            margin-top: 16px;
+        }
+        .face-images img {
+            width: 120px;
+            height: 120px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 2px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="index.html" class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-shield" style="color: var(--accent-color);">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                <path d="M9 12l2 2 4-4"></path>
+            </svg>
+            Verifyyy
+        </a>
+    </nav>
+
+    <div class="demo-container">
+        <h2 style="margin-bottom: 16px; font-weight: 800;">Demo: OCR and Live Face Detection</h2>
+        <p style="color: var(--text-muted); margin-bottom: 24px;">Hold your Aadhaar or PAN next to your face, then capture. The system will extract your ID details and ensure a live person is holding it.</p>
+        
+        <div class="live-id-video-wrap" id="live-id-video-card">
+            <video id="live-id-webcam" autoplay playsinline></video>
+            <div id="live-id-tick" class="live-id-tick hidden">
+                <div class="tick-circle">✓</div>
+                <div class="tick-label">ID hold captured</div>
+            </div>
+        </div>
+        <button class="btn" id="btn-capture-live-id" type="button" style="width:100%; max-width: 560px;">Capture ID & Face</button>
+        <canvas id="live-id-canvas" class="hidden"></canvas>
+
+        <div id="loading-spinner" class="hidden" style="margin-top: 24px; color: var(--accent-color); font-weight: bold;">
+            Processing...
+        </div>
+
+        <div id="result-panel" class="result-panel hidden">
+            <!-- Results injected here -->
+        </div>
+        
+        <button class="btn btn-outline hidden" id="btn-retry" type="button" style="margin-top: 24px; width: 100%; max-width: 560px;">Retry Capture</button>
+    </div>
+
+    <script src="demo_ocr_face.js?v=3"></script>
+</body>
+</html>

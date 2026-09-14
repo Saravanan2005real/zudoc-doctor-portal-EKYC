@@ -276,7 +276,7 @@ class DefaultEkycEvaluationService:
                     "http://ocr_engine:5001/api/v1/ocr",
                     files={"file": (filename or "upload.jpg", raw)},
                     data={"document_type": doc_type} if doc_type else {},
-                    timeout=30
+                    timeout=180
                 )
                 code = resp.status_code
                 data = resp.json()

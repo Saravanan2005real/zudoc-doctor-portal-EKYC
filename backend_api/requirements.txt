@@ -10,6 +10,9 @@ passlib[bcrypt]
 bcrypt
 python-multipart
 requests
+httpx
+email-validator
+pillow
 cloudinary
 boto3
 twilio

@@ -22,14 +22,11 @@
         </div>
       </div>
 
-      <nav class="nav-tabs">
-        <button class="nav-tab active" data-tab="wizard-view">
+      <div class="nav-tabs">
+        <div class="nav-tab active" style="cursor: default;">
           <span class="tab-icon">👨‍⚕️</span> Doctor Verification Wizard
-        </button>
-        <button class="nav-tab" data-tab="admin-view">
-          <span class="tab-icon">🛡️</span> Admin Portal
-        </button>
-      </nav>
+        </div>
+      </div>
 
       <div class="user-session" id="user-session-badge">
         <span class="status-indicator offline"></span>
@@ -655,94 +652,6 @@
           <div class="page-footer flex-between mt-4">
             <button class="btn btn-outline" onclick="goToStep(4)">⬅ Back to Step 4</button>
             <button class="btn btn-primary" onclick="goToStep(1)">Restart Onboarding Wizard 🔄</button>
-          </div>
-        </div>
-      </div>
-
-    </section>
-
-    <!-- ==================== VIEW 2: ADMIN PORTAL ==================== -->
-    <section id="admin-view" class="view-panel">
-      
-      <div class="metrics-grid">
-        <div class="metric-card">
-          <div class="metric-val" id="metric-total-docs">0</div>
-          <div class="metric-lbl">Total Registered Doctors</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-val text-warning" id="metric-pending-verifications">0</div>
-          <div class="metric-lbl">Pending Review Queue</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-val text-success" id="metric-verified-rate">0%</div>
-          <div class="metric-lbl">Auto-Verification Rate</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-val text-danger" id="metric-dlq-count">0</div>
-          <div class="metric-lbl">Dead Letter Queue Jobs</div>
-        </div>
-      </div>
-
-      <div class="glass-card mt-4">
-        <div class="card-header">
-          <h3>🔍 Verification Operations Queue</h3>
-          <div class="search-controls">
-            <input type="text" id="admin-search-input" placeholder="Search doctor by name, mobile, or public ID...">
-            <button id="btn-admin-search" class="btn btn-outline">Search</button>
-            <button id="btn-admin-refresh" class="btn btn-primary">Refresh Analytics</button>
-          </div>
-        </div>
-
-        <table class="data-table mt-3">
-          <thead>
-            <tr>
-              <th>Doctor Name</th>
-              <th>Public ID</th>
-              <th>Mobile</th>
-              <th>Status</th>
-              <th>Risk Score</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="admin-verifications-tbody">
-            <tr>
-              <td colspan="6" class="text-center py-3 text-muted">Click "Refresh Analytics" or submit a doctor application to view queue.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Inspector Drawer Modal -->
-      <div class="glass-card mt-4 hidden" id="admin-inspector-card">
-        <div class="card-header">
-          <h3>🔎 Side-by-Side Verification Inspector</h3>
-          <button class="btn btn-outline btn-sm" id="btn-close-inspector">Close Inspector</button>
-        </div>
-
-        <div class="inspector-grid">
-          <div class="inspector-col">
-            <div class="col-title">👨‍⚕️ Doctor Submitted Claim</div>
-            <div class="info-group"><label>Doctor ID:</label><div class="val-text" id="insp-doc-id">-</div></div>
-            <div class="info-group"><label>Full Name:</label><div class="val-text" id="insp-doc-name">-</div></div>
-            <div class="info-group"><label>Reg Number:</label><div class="val-text" id="insp-doc-reg-num">-</div></div>
-            <div class="info-group"><label>Council:</label><div class="val-text" id="insp-doc-council">-</div></div>
-          </div>
-
-          <div class="inspector-col">
-            <div class="col-title">🏛️ NMC Registry Data</div>
-            <div class="info-group"><label>Registry Name:</label><div class="val-text" id="insp-registry-name">-</div></div>
-            <div class="info-group"><label>Registry Status:</label><div class="val-text" id="insp-registry-status">-</div></div>
-            <div class="info-group"><label>Levenshtein Match:</label><div class="val-text highlighted" id="insp-match-score">-</div></div>
-          </div>
-
-          <div class="inspector-col">
-            <div class="col-title">🛡️ Risk Score & Actions</div>
-            <div class="info-group"><label>Fraud Score:</label><div class="val-text" id="insp-fraud-score">-</div></div>
-            <div class="admin-actions-box mt-3">
-              <button id="btn-action-approve" class="btn btn-success btn-block">Approve Doctor</button>
-              <button id="btn-action-reject" class="btn btn-danger btn-block mt-2">Reject Application</button>
-              <button id="btn-action-req-docs" class="btn btn-warning btn-block mt-2">Request Better Scans</button>
-            </div>
           </div>
         </div>
       </div>

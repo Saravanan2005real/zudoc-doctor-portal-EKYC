@@ -1,0 +1,9 @@
+services:
+  ocr_engine:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
