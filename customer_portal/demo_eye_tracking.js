@@ -18,25 +18,38 @@ window.onload = function() {
 };
 
 async function startDemo() {
-    document.getElementById('intro-card').classList.add('hidden');
+    const btn = document.getElementById('btn-start-demo');
+    const loadingMsg = document.getElementById('loading-msg');
     
-    // Initialize WebGazer
-    webgazer.params.showVideoPreview = true;
-    webgazer.params.showFaceOverlay = true;
-    webgazer.params.showFaceFeedbackBox = true;
-    webgazer.params.showGazeDot = false; // We use our own reticle after calibration
+    btn.classList.add('hidden');
+    loadingMsg.classList.remove('hidden');
     
-    await webgazer.setRegression('ridge')
-        .setTracker('TFFacemesh')
-        .begin();
+    try {
+        // Initialize WebGazer
+        webgazer.params.showVideoPreview = false;
+        webgazer.params.showFaceOverlay = false;
+        webgazer.params.showFaceFeedbackBox = false;
+        webgazer.params.showGazeDot = false; // We use our own reticle after calibration
+        
+        await webgazer.setRegression('ridge')
+            .setTracker('TFFacemesh')
+            .begin();
 
-    // The video container is created by webgazer
-    const vidContainer = document.getElementById('webgazerVideoContainer');
-    if (vidContainer) {
-        vidContainer.style.display = 'block';
+        document.getElementById('intro-card').classList.add('hidden');
+
+        // Ensure the video container is hidden so it doesn't block dots
+        const vidContainer = document.getElementById('webgazerVideoContainer');
+        if (vidContainer) {
+            vidContainer.style.display = 'none';
+        }
+
+        startCalibration();
+    } catch (err) {
+        loadingMsg.textContent = "Error: Failed to start camera or AI models. Please ensure camera permissions are allowed.";
+        loadingMsg.style.color = '#ef4444';
+        btn.classList.remove('hidden');
+        console.error("WebGazer start error:", err);
     }
-
-    startCalibration();
 }
 
 function startCalibration() {
@@ -44,8 +57,11 @@ function startCalibration() {
     const calLayer = document.getElementById('calLayer');
     calLayer.innerHTML = '';
     
+    // WebGazer by default adds mouse tracking listeners for clicks and moves.
+    // We can rely on our explicit recordings during hover.
+    webgazer.removeMouseEventListeners();
+    
     CAL_DOTS.forEach(dot => {
-        clickCounts[dot.id] = 0;
         const btn = document.createElement('button');
         btn.className = 'cal-dot';
         btn.dataset.calId = dot.id;
@@ -59,20 +75,35 @@ function startCalibration() {
         btn.style.left = `${x}px`;
         btn.style.top = `${y}px`;
         
-        btn.addEventListener('click', (e) => {
-            // WebGazer automatically calibrates on click globally if addMouseEventListeners is on (default).
-            // But we manually force a record just in case.
-            webgazer.recordScreenPosition(x, y, 'click');
+        let hoverInterval;
+        let hoverTime = 0;
+        const REQUIRED_HOVER_TIME = 1500; // 1.5s per dot
+        
+        btn.addEventListener('mouseenter', () => {
+            if (btn.classList.contains('cal-done')) return;
             
-            clickCounts[dot.id]++;
-            
-            // Give visual feedback
-            btn.style.opacity = Math.max(0.2, 1 - (clickCounts[dot.id] / 3));
-            
-            if (clickCounts[dot.id] >= 3) {
-                btn.classList.add('cal-done');
+            hoverInterval = setInterval(() => {
+                hoverTime += 100;
+                // Force a recording of this point
+                webgazer.recordScreenPosition(x, y, 'click');
+                
+                // Visual feedback
+                btn.style.opacity = Math.max(0.2, 1 - (hoverTime / REQUIRED_HOVER_TIME));
+                
+                if (hoverTime >= REQUIRED_HOVER_TIME) {
+                    clearInterval(hoverInterval);
+                    btn.classList.add('cal-done');
+                    btn.style.opacity = '1';
+                    checkCalibrationComplete();
+                }
+            }, 100);
+        });
+        
+        btn.addEventListener('mouseleave', () => {
+            if (hoverInterval) clearInterval(hoverInterval);
+            if (!btn.classList.contains('cal-done')) {
+                hoverTime = 0;
                 btn.style.opacity = '1';
-                checkCalibrationComplete();
             }
         });
         
@@ -81,7 +112,8 @@ function startCalibration() {
 }
 
 function checkCalibrationComplete() {
-    const done = CAL_DOTS.filter(d => clickCounts[d.id] >= 3).length;
+    const doneElements = document.querySelectorAll('.cal-done');
+    const done = doneElements.length;
     document.getElementById('calProgress').textContent = `${done} / ${CAL_DOTS.length} dots`;
     
     if (done === CAL_DOTS.length) {
