@@ -16,10 +16,10 @@ Goals:
 ## 2. High-level design
 
 ```
-Doctor / Admin UI (public/)       B2B End User UI (b2b_portal/)
+Doctor UI (frontend_portal) / Admin UI (superadmin)       B2B End User UI (b2b_portal/)
         │                                 │
         ▼                                 ▼
-   HTTP API (python_backend/main.py + controllers)  ◄── Pipeline Builder (customer_portal/)
+   HTTP API (backend_api/main.py + controllers)  ◄── Pipeline Builder (customer_portal/)
         │
    ┌────┴────┐
    │ Services│  ← auth, profile, documents, submission, admin review, analytics
@@ -29,7 +29,7 @@ Doctor / Admin UI (public/)       B2B End User UI (b2b_portal/)
         │
    On submit ──► VerificationJob (QUEUED)
         │
-   OCR microservice (ocr_service/) ──► PaddleOCR / RetinaFace / face match
+   OCR microservice (ocr_engine/) ──► PaddleOCR / RetinaFace / face match
         │
    Verification Pipeline
               OCR → Compare → Council → Fraud → Decision
@@ -64,10 +64,10 @@ Schema evolves via `migrations/*.sql` plus SQLAlchemy `Base.metadata.create_all`
 
 | Layer | Packages | Responsibility |
 |-------|----------|----------------|
-| Transport | `python_backend/controllers/`, `main.py` | HTTP routing, rate limits, guards |
-| Application | `python_backend/services/` | Use-cases, orchestration, pipeline |
-| Domain | `python_backend/entities/`, `verification/*`, `security/*` | Models, rules, engines |
-| Infrastructure | `repositories/`, `storage/`, `sms/`, `ocr/`, `ocr_service/` | IO adapters + OCR microservice |
+| Transport | `backend_api/controllers/`, `main.py` | HTTP routing, rate limits, guards |
+| Application | `backend_api/services/` | Use-cases, orchestration, pipeline |
+| Domain | `backend_api/entities/`, `verification/*`, `security/*` | Models, rules, engines |
+| Infrastructure | `repositories/`, `storage/`, `sms/`, `ocr_engine/` | IO adapters + OCR microservice |
 
 **Why this shape:** keeps business rules testable without HTTP/DB, and allows swapping providers (mock OCR ↔ Azure/Google, local storage ↔ S3/Cloudinary, mock SMS ↔ MSG91/Twilio).
 
@@ -160,7 +160,7 @@ CI (GitHub Actions): Python compile checks, Docker image build on `main`/`master
 
 ## 12. Extensibility guidelines
 
-1. Add new verification signals as packages under `python_backend/verification/` and inject into the pipeline service.
+1. Add new verification signals as packages under `backend_api/verification/` and inject into the pipeline service.
 2. Prefer new repository methods over leaking SQLAlchemy sessions into controllers.
 3. Keep provider interfaces (OCR, SMS, storage, council, notifications) so mocks stay first-class in tests.
 4. Evolve API contract in `docs/openapi.yaml` alongside handlers.
@@ -176,3 +176,4 @@ CI (GitHub Actions): Python compile checks, Docker image build on `main`/`master
 - Replacing the medical council’s system of record
 
 These can be layered on without changing the core pipeline boundaries above.
+

@@ -29,10 +29,10 @@ The `customer_portal/` now includes a full B2B Pipeline Builder. Business client
 
 | Layer | Technology |
 |-------|------------|
-| Portal UI | Vanilla HTML / CSS / JS (`python_backend/public/`) |
-| Backend API | **FastAPI** + Uvicorn + Pydantic (`python_backend/`) |
+| Portal UI | Vanilla HTML / CSS / JS (`frontend_portal/`) |
+| Backend API | **FastAPI** + Uvicorn + Pydantic (`backend_api/`) |
 | ORM / DB | SQLAlchemy 2 + **PostgreSQL** |
-| OCR / faces | **In-process** PaddleOCR + RetinaFace + OpenCV (`python_backend/ocr/`) |
+| OCR / faces | **In-process** PaddleOCR + RetinaFace + OpenCV (`ocr_engine/`) |
 | Liveness (sighted) | **WebGazer.js** + MediaPipe Face Mesh (browser) |
 | Liveness (accessible) | Speech synthesis + MediaPipe head-turn / blink checks |
 | Auth | Password hash + SMS OTP (mock prints to console) + JWT / refresh tokens |
@@ -49,7 +49,7 @@ One FastAPI process serves the **portal UI**, **REST API**, and **OCR / live-fac
 ```mermaid
 flowchart TB
   subgraph Client["Browser + Webcam"]
-    UI["Doctor Portal<br/>Steps 1–5 · public/"]
+    UI["Doctor Portal<br/>Steps 1–5 · frontend_portal/"]
     B2B["B2B End User<br/>b2b_portal/"]
     CUST["Pipeline Builder<br/>customer_portal/"]
     WG["Step 4.2 Eye tracking<br/>WebGazer + Face Mesh"]
@@ -61,10 +61,10 @@ flowchart TB
     NGX["Nginx :80"]
   end
 
-  subgraph Backend["python_backend — single process :8080"]
+  subgraph Backend["backend_api/ — single process :8080"]
     API["FastAPI / Uvicorn"]
     SVC["Services<br/>auth · documents · evaluate-ekyc · submit"]
-    OCR["In-process OCR<br/>ocr/engine · ocr/inproc"]
+    OCR["In-process OCR<br/>ocr_engine/"]
     LIVE["Live face check<br/>POST /api/v1/live_face_check"]
     REPO["SQLAlchemy repositories"]
     STORE["uploads/ + ocr_uploads/"]
@@ -99,9 +99,9 @@ flowchart TB
 
 | Component | Path | Port / entry | Responsibility |
 |-----------|------|--------------|----------------|
-| Portal + API + OCR | `python_backend/` | **:8080** (`python main.py`) | Auth, wizard, documents, **evaluate-ekyc**, live face, prescriptions, static UI |
-| OCR engine | `python_backend/ocr/` | same process | Aadhaar/PAN OCR, RetinaFace crop, Verhoeff/format checks |
-| Browser liveness | `python_backend/public/app.js` | browser | WebGazer eye tracking **or** audio-guided checks |
+| Portal + API + OCR | `backend_api/` | **:8080** (`python main.py`) | Auth, wizard, documents, **evaluate-ekyc**, live face, prescriptions, static UI |
+| OCR engine | `ocr_engine/` | same process | Aadhaar/PAN OCR, RetinaFace crop, Verhoeff/format checks |
+| Browser liveness | `frontend_portal/app.js` | browser | WebGazer eye tracking **or** audio-guided checks |
 | Database | PostgreSQL | **:5433** local / **:5432** Compose | Doctors, docs, OTP, history |
 | Nginx | `nginx.conf` | **:80** | Reverse proxy (Compose) |
 
@@ -234,7 +234,7 @@ flowchart TD
 
 ---
 
-## Eye tracking module (`python_backend/eye_tracking/`)
+## Eye tracking module (`eye_tracking_module/`)
 
 Standalone webcam module built around **FGI-Net** (*Fusion Global Information* gaze estimator) plus **MediaPipe Face Mesh** iris landmarks.
 
@@ -264,7 +264,7 @@ flowchart TD
 ### Package layout
 
 ```text
-python_backend/eye_tracking/
+eye_tracking_module/
 ├── FGI-Net/                 # Upstream architecture reference
 ├── fgi_eye_tracker/         # Our package
 │   ├── fgi_net.py           # Import-safe FGI-Net
@@ -287,7 +287,7 @@ python_backend/eye_tracking/
 ### Run eye tracking
 
 ```powershell
-cd python_backend/eye_tracking
+cd eye_tracking_module/
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
@@ -316,7 +316,7 @@ python demo.py
 
 ```text
 eKYC/
-├── python_backend/          # FastAPI portal (contains UI, OCR, and eye_tracking)
+├── backend_api/          # FastAPI portal (contains UI, OCR, and eye_tracking)
 ├── src/disability-app/      # Source code for the React Accessibility module
 ├── migrations/              # SQL migrations
 ├── docs/                    # ARCHITECTURE.md, openapi.yaml
@@ -355,7 +355,7 @@ eKYC/
 ### 2. Portal (API + UI + OCR — one process)
 
 ```bash
-cd python_backend
+cd backend_api/
 python -m venv .venv
 # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -427,7 +427,7 @@ npm run dev
 ## Further reading
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Mermaid system / sequence / deploy views
-- [`python_backend/eye_tracking/README.md`](python_backend/eye_tracking/README.md) — optional FGI-Net module
+- [`eye_tracking_module/README.md`](eye_tracking_module/README.md) — optional FGI-Net module
 - [`DESIGN.md`](DESIGN.md) — design goals & extensibility
 - [`computational.md`](computational.md) — hardware & compute requirements
 - [`docs/openapi.yaml`](docs/openapi.yaml) — API contract
@@ -437,3 +437,4 @@ npm run dev
 ## License / status
 
 Internal / project demo for ZuDoc doctor onboarding, eKYC evaluation, and gaze tracking experiments. Production SMS, cloud OCR credentials, author-trained FGI weights, and full admin review wiring remain provider swaps — see `DESIGN.md` non-goals.
+
