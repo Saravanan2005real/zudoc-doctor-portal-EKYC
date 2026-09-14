@@ -146,12 +146,13 @@ function finishCalibration() {
 }
 
 function startChallenge() {
-    // Simply show a target in the center for 3 seconds and measure if gaze is close
+    let dotsHit = 0;
+    let currentDotIndex = 0;
+    const TOTAL_DOTS = 4;
+    const TARGET_RADIUS = 250; // Comfortable generous radius
+    
     const target = document.createElement('div');
     target.style.position = 'fixed';
-    target.style.top = '50%';
-    target.style.left = '50%';
-    target.style.transform = 'translate(-50%, -50%)';
     target.style.width = '60px';
     target.style.height = '60px';
     target.style.backgroundColor = '#f59e0b';
@@ -160,41 +161,73 @@ function startChallenge() {
     target.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.6)';
     document.body.appendChild(target);
 
-    // Give user 1s to look at center, then measure for 2s
-    let hits = 0;
-    let total = 0;
-    
     let challengeInterval = null;
-    
-    setTimeout(() => {
+    let dotTimeout = null;
+
+    function showNextDot() {
+        if (currentDotIndex >= TOTAL_DOTS) {
+            endChallenge();
+            return;
+        }
+
+        // Generate random position (keep it somewhat centralized to avoid edges)
+        const margin = 100;
+        const x = margin + Math.random() * (window.innerWidth - 2 * margin);
+        const y = margin + Math.random() * (window.innerHeight - 2 * margin);
+        
+        target.style.left = `${x}px`;
+        target.style.top = `${y}px`;
+        target.style.transform = 'translate(-50%, -50%) scale(1)';
+        target.style.backgroundColor = '#f59e0b';
+        
+        let lookDuration = 0;
+        
+        if (challengeInterval) clearInterval(challengeInterval);
+        if (dotTimeout) clearTimeout(dotTimeout);
+        
         challengeInterval = setInterval(() => {
             const pred = webgazer.getCurrentPrediction();
             if (pred) {
-                total++;
-                const cx = window.innerWidth / 2;
-                const cy = window.innerHeight / 2;
-                const dist = Math.hypot(pred.x - cx, pred.y - cy);
-                
-                // If within 150px of center, it's a hit
-                if (dist < 150) {
-                    hits++;
+                const dist = Math.hypot(pred.x - x, pred.y - y);
+                // If eye tracking meets inside our generous radius
+                if (dist < TARGET_RADIUS) {
+                    lookDuration += 50;
                     target.style.transform = 'translate(-50%, -50%) scale(1.2)';
+                    target.style.backgroundColor = '#10b981'; // Turn green on hit
+                    
+                    // If they look at it inside the radius for 0.5s, it counts as a hit!
+                    if (lookDuration > 500) {
+                        dotsHit++;
+                        currentDotIndex++;
+                        showNextDot();
+                    }
                 } else {
+                    lookDuration = 0;
                     target.style.transform = 'translate(-50%, -50%) scale(1)';
+                    target.style.backgroundColor = '#f59e0b';
                 }
             }
         }, 50);
-    }, 1000);
 
-    // End after 3 seconds total
-    setTimeout(() => {
-        clearInterval(challengeInterval);
+        // Give them 3 seconds max per dot to find it
+        dotTimeout = setTimeout(() => {
+            currentDotIndex++;
+            showNextDot();
+        }, 3000);
+    }
+
+    function endChallenge() {
+        if (challengeInterval) clearInterval(challengeInterval);
+        if (dotTimeout) clearTimeout(dotTimeout);
         target.remove();
         document.getElementById('gazeReticle').style.display = 'none';
         
-        const accuracy = total > 0 ? (hits / total) : 0;
+        const accuracy = dotsHit / TOTAL_DOTS;
         showVerdict(accuracy);
-    }, 4000);
+    }
+
+    // Give user 1s before starting the first dot
+    setTimeout(showNextDot, 1000);
 }
 
 function showVerdict(accuracy) {
