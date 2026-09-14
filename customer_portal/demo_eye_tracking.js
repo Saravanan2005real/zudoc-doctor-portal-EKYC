@@ -145,12 +145,24 @@ function finishCalibration() {
     startChallenge();
 }
 
+function randomDotPosition(index) {
+  const zones = [{ x: 0.28, y: 0.32 }, { x: 0.72, y: 0.32 }, { x: 0.5, y: 0.5 }, { x: 0.28, y: 0.7 }, { x: 0.72, y: 0.7 }];
+  const zone = zones[index % zones.length];
+  const jitterX = (Math.random() - 0.5) * 0.12;
+  const jitterY = (Math.random() - 0.5) * 0.1;
+  return { 
+      x: Math.min(0.85, Math.max(0.15, zone.x + jitterX)) * window.innerWidth, 
+      y: Math.min(0.82, Math.max(0.22, zone.y + jitterY)) * window.innerHeight 
+  };
+}
+
 function startChallenge() {
-    let dotsHit = 0;
-    let currentDotIndex = 0;
-    const TOTAL_DOTS = 4;
-    const TARGET_RADIUS = 250; // Comfortable generous radius
+    const CHALLENGE_COUNT = 5;
+    const CHALLENGE_DURATION_MS = 2000;
+    const GAZE_HIT_RATIO = 0.6;
     
+    const gazeHitRadius = () => Math.max(150, window.innerWidth * 0.1); 
+
     const target = document.createElement('div');
     target.style.position = 'fixed';
     target.style.width = '60px';
@@ -161,73 +173,68 @@ function startChallenge() {
     target.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.6)';
     document.body.appendChild(target);
 
-    let challengeInterval = null;
-    let dotTimeout = null;
-
-    function showNextDot() {
-        if (currentDotIndex >= TOTAL_DOTS) {
-            endChallenge();
-            return;
-        }
-
-        // Generate random position (keep it somewhat centralized to avoid edges)
-        const margin = 100;
-        const x = margin + Math.random() * (window.innerWidth - 2 * margin);
-        const y = margin + Math.random() * (window.innerHeight - 2 * margin);
-        
-        target.style.left = `${x}px`;
-        target.style.top = `${y}px`;
-        target.style.transform = 'translate(-50%, -50%) scale(1)';
-        target.style.backgroundColor = '#f59e0b';
-        
-        let lookDuration = 0;
-        
-        if (challengeInterval) clearInterval(challengeInterval);
-        if (dotTimeout) clearTimeout(dotTimeout);
-        
-        challengeInterval = setInterval(() => {
-            const pred = webgazer.getCurrentPrediction();
-            if (pred) {
-                const dist = Math.hypot(pred.x - x, pred.y - y);
-                // If eye tracking meets inside our generous radius
-                if (dist < TARGET_RADIUS) {
-                    lookDuration += 50;
-                    target.style.transform = 'translate(-50%, -50%) scale(1.2)';
-                    target.style.backgroundColor = '#10b981'; // Turn green on hit
-                    
-                    // If they look at it inside the radius for 0.5s, it counts as a hit!
-                    if (lookDuration > 500) {
-                        dotsHit++;
-                        currentDotIndex++;
-                        showNextDot();
+    let gazePasses = 0;
+    
+    async function runAllChallenges() {
+        for (let i = 0; i < CHALLENGE_COUNT; i++) {
+            const pos = randomDotPosition(i);
+            target.style.left = `${pos.x}px`;
+            target.style.top = `${pos.y}px`;
+            target.style.transform = 'translate(-50%, -50%)';
+            target.style.backgroundColor = '#f59e0b';
+            
+            // Wait 1 second to settle gaze
+            await new Promise(r => setTimeout(r, 1000));
+            
+            // Run challenge and measure samples just like the doctor portal
+            const passed = await new Promise((resolve) => {
+                let hits = 0;
+                let samples = 0;
+                let sumDist = 0;
+                const radius = gazeHitRadius();
+                const t0 = performance.now();
+                
+                const tick = () => {
+                    const elapsed = performance.now() - t0;
+                    const pred = webgazer.getCurrentPrediction();
+                    if (pred) {
+                        samples++;
+                        const d = Math.hypot(pred.x - pos.x, pred.y - pos.y);
+                        sumDist += d;
+                        if (d <= radius) {
+                            hits++;
+                            target.style.backgroundColor = '#10b981';
+                        } else {
+                            target.style.backgroundColor = '#f59e0b';
+                        }
                     }
-                } else {
-                    lookDuration = 0;
-                    target.style.transform = 'translate(-50%, -50%) scale(1)';
-                    target.style.backgroundColor = '#f59e0b';
-                }
-            }
-        }, 50);
-
-        // Give them 3 seconds max per dot to find it
-        dotTimeout = setTimeout(() => {
-            currentDotIndex++;
-            showNextDot();
-        }, 3000);
-    }
-
-    function endChallenge() {
-        if (challengeInterval) clearInterval(challengeInterval);
-        if (dotTimeout) clearTimeout(dotTimeout);
+                    
+                    if (elapsed >= CHALLENGE_DURATION_MS) {
+                        const gazeRatio = samples ? hits / samples : 0;
+                        const avgDist = samples ? sumDist / samples : Infinity;
+                        
+                        // Exact mathematical logic from doctor portal (gazeOk)
+                        const gazeOk = samples >= 8 && (gazeRatio >= GAZE_HIT_RATIO || avgDist <= radius * 1.15);
+                        resolve(gazeOk);
+                        return;
+                    }
+                    requestAnimationFrame(tick);
+                };
+                requestAnimationFrame(tick);
+            });
+            
+            if (passed) gazePasses++;
+        }
+        
         target.remove();
         document.getElementById('gazeReticle').style.display = 'none';
         
-        const accuracy = dotsHit / TOTAL_DOTS;
+        // Doctor portal checks if you pass at least 60% of the challenges
+        const accuracy = gazePasses / CHALLENGE_COUNT;
         showVerdict(accuracy);
     }
-
-    // Give user 1s before starting the first dot
-    setTimeout(showNextDot, 1000);
+    
+    runAllChallenges();
 }
 
 function showVerdict(accuracy) {
