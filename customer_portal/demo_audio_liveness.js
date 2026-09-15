@@ -1,5 +1,6 @@
 // Audio Liveness Constants
 const AUDIO_YAW_THRESHOLD = 0.10;
+const AUDIO_PITCH_THRESHOLD = 0.08;
 const AUDIO_TURN_TIMEOUT_MS = 14000;
 const AUDIO_BLINK_TARGET = 2;
 const AUDIO_BLINK_TIMEOUT_MS = 14000;
@@ -145,6 +146,27 @@ function currentYaw() {
     return Number.isFinite(eyeYaw) ? eyeYaw : null;
 }
 
+function currentPitch() {
+    if (!currentLandmarks || currentLandmarks.length < 468) return null;
+    const lm = currentLandmarks;
+    const nose = lm[1];
+    const lOuter = lm[33];
+    const rOuter = lm[263];
+    const mouthTop = lm[13];
+    if (!nose || !lOuter || !rOuter || !mouthTop) return null;
+
+    const midEyeY = (lOuter.y + rOuter.y) / 2;
+    // vertical distance between eyes and mouth
+    const eyeToMouth = Math.max(1e-4, mouthTop.y - midEyeY);
+    const eyeToNose = nose.y - midEyeY;
+    
+    // Ratio of nose position relative to eyes and mouth. 
+    // Looking down: nose moves closer to mouth (ratio increases). 
+    // Looking up: nose moves closer to eyes (ratio decreases).
+    const pitch = eyeToNose / eyeToMouth;
+    return Number.isFinite(pitch) ? pitch : null;
+}
+
 function calculateEAR(eyeLandmarks) {
     const v1 = Math.hypot(eyeLandmarks[1].x - eyeLandmarks[5].x, eyeLandmarks[1].y - eyeLandmarks[5].y);
     const v2 = Math.hypot(eyeLandmarks[2].x - eyeLandmarks[4].x, eyeLandmarks[2].y - eyeLandmarks[4].y);
@@ -179,43 +201,79 @@ async function measureBaselineYaw(durationMs = 700) {
     return samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : (currentYaw() ?? 0);
 }
 
-function waitForHeadTurn(baseline, forbidSign, timeoutMs) {
+async function measureBaselinePitch(durationMs = 700) {
+    const samples = [];
+    const t0 = performance.now();
+    while (performance.now() - t0 < durationMs) {
+        const p = currentPitch();
+        if (p != null && Number.isFinite(p)) samples.push(p);
+        await wait(30);
+    }
+    return samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : (currentPitch() ?? 0.5);
+}
+
+function waitForSpecificTurn(direction, baselineYaw, baselinePitch, timeoutMs) {
     return new Promise((resolve) => {
         const t0 = performance.now();
-        let peak = 0;
-        let peakSign = 0;
         let turned = false;
+        let peakValue = 0;
 
         const tick = () => {
             const yaw = currentYaw();
-            if (yaw != null) {
-                const delta = yaw - baseline;
-                const sign = Math.sign(delta);
+            const pitch = currentPitch();
+            if (yaw != null && pitch != null) {
+                const deltaYaw = yaw - baselineYaw;
+                const deltaPitch = pitch - baselinePitch;
+
+                let isTurned = false;
+                let isReturned = false;
+                let currentVal = 0;
+
+                // For strict checking, we ensure they only turn the requested way
+                if (direction === 'left') {
+                    // yaw < 0 means nose moved left relative to eyes (user turned head right from our perspective, so they turned left)
+                    isTurned = deltaYaw < -AUDIO_YAW_THRESHOLD;
+                    isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.5;
+                    currentVal = Math.abs(deltaYaw);
+                } else if (direction === 'right') {
+                    isTurned = deltaYaw > AUDIO_YAW_THRESHOLD;
+                    isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.5;
+                    currentVal = Math.abs(deltaYaw);
+                } else if (direction === 'up') {
+                    isTurned = deltaPitch < -AUDIO_PITCH_THRESHOLD;
+                    isReturned = Math.abs(deltaPitch) <= AUDIO_PITCH_THRESHOLD * 0.5;
+                    currentVal = Math.abs(deltaPitch);
+                } else if (direction === 'down') {
+                    isTurned = deltaPitch > AUDIO_PITCH_THRESHOLD;
+                    isReturned = Math.abs(deltaPitch) <= AUDIO_PITCH_THRESHOLD * 0.5;
+                    currentVal = Math.abs(deltaPitch);
+                }
 
                 if (!turned) {
-                    if (Math.abs(delta) >= AUDIO_YAW_THRESHOLD && (forbidSign === 0 || sign !== forbidSign)) {
+                    if (isTurned) {
                         turned = true;
-                        peak = Math.abs(delta);
-                        peakSign = sign;
+                        peakValue = currentVal;
                         chime.next();
                         announce('Good turn detected! Now return to the centre.', 'Turn detected — Face forward');
                         speak('Good. Now face forward again.');
                     }
                 } else {
-                    if (Math.abs(delta) > peak) peak = Math.abs(delta);
-                    if (Math.abs(delta) <= AUDIO_YAW_THRESHOLD * 0.50) {
-                        resolve({ ok: true, sign: peakSign, peak });
+                    if (currentVal > peakValue) peakValue = currentVal;
+                    if (isReturned) {
+                        resolve({ ok: true, direction });
                         return;
                     }
                 }
             }
 
             if (performance.now() - t0 >= timeoutMs) {
-                if (turned && peak >= AUDIO_YAW_THRESHOLD * 1.1) {
-                    resolve({ ok: true, sign: peakSign, peak });
+                // If they turned but didn't return fully, we might accept it if it was a strong turn
+                const threshold = (direction === 'left' || direction === 'right') ? AUDIO_YAW_THRESHOLD : AUDIO_PITCH_THRESHOLD;
+                if (turned && peakValue >= threshold * 1.1) {
+                    resolve({ ok: true, direction });
                     return;
                 }
-                resolve({ ok: false, sign: peakSign, peak });
+                resolve({ ok: false, direction });
                 return;
             }
             requestAnimationFrame(tick);
@@ -310,10 +368,15 @@ async function startAudioLiveness() {
 
     renderAudioSteps(3, 0, -1);
 
+    const allDirs = ['left', 'right', 'up', 'down'];
+    // Randomly select 2 unique directions
+    const dir1 = allDirs.splice(Math.floor(Math.random() * allDirs.length), 1)[0];
+    const dir2 = allDirs.splice(Math.floor(Math.random() * allDirs.length), 1)[0];
+
     const checks = [
         { label: 'Face detected and tracked live', passed: false },
-        { label: 'First head turn completed', passed: false },
-        { label: 'Second head turn to the other side', passed: false },
+        { label: `Look ${dir1} and back to centre`, passed: false },
+        { label: `Look ${dir2} and back to centre`, passed: false },
         { label: 'Two deliberate blinks detected', passed: false },
     ];
 
@@ -338,13 +401,14 @@ async function startAudioLiveness() {
         }
 
         // Measure baseline
-        const baseline1 = await measureBaselineYaw(800);
+        const baselineYaw = await measureBaselineYaw(800);
+        const baselinePitch = await measureBaselinePitch(800);
 
         // Turn 1
         renderAudioSteps(3, 0, 0);
-        announce('Slowly turn your head to your left or right, then back to the centre.', 'Waiting for a head turn');
-        speak('Slowly turn your head to your left or right, then bring it back to the centre.');
-        const turn1 = await waitForHeadTurn(baseline1, 0, AUDIO_TURN_TIMEOUT_MS);
+        announce(`Slowly look ${dir1}, then back to the centre.`, `Waiting for a head movement ${dir1}`);
+        speak(`Slowly look ${dir1}, then bring it back to the centre.`);
+        const turn1 = await waitForSpecificTurn(dir1, baselineYaw, baselinePitch, AUDIO_TURN_TIMEOUT_MS);
         checks[1].passed = turn1.ok;
         
         if (turn1.ok) {
@@ -354,19 +418,19 @@ async function startAudioLiveness() {
         } else {
             chime.fail();
             renderAudioSteps(3, 0, 1);
-            speak('I did not detect that turn. Let us continue.');
+            speak('I did not detect that movement. Let us continue.');
         }
         await wait(1000);
 
         // Re-center
         announce('Face forward for the next check.', 'Centering…');
-        const baseline2 = await measureBaselineYaw(500);
+        const baselineYaw2 = await measureBaselineYaw(500);
+        const baselinePitch2 = await measureBaselinePitch(500);
 
         // Turn 2
-        const promptSide = turn1.ok ? 'the other side' : 'your right';
-        announce(`Now turn your head to ${promptSide}, then back to the centre.`, 'Waiting for opposite turn');
-        speak(`Now turn your head to ${promptSide}, then back to the centre.`);
-        const turn2 = await waitForHeadTurn(baseline2, turn1.ok ? turn1.sign : 0, AUDIO_TURN_TIMEOUT_MS);
+        announce(`Now slowly look ${dir2}, then back to the centre.`, `Waiting for a head movement ${dir2}`);
+        speak(`Now slowly look ${dir2}, then back to the centre.`);
+        const turn2 = await waitForSpecificTurn(dir2, baselineYaw2, baselinePitch2, AUDIO_TURN_TIMEOUT_MS);
         checks[2].passed = turn2.ok;
         
         if (turn2.ok) {
@@ -375,7 +439,7 @@ async function startAudioLiveness() {
             speak('Perfect.');
         } else {
             chime.fail();
-            speak('I did not detect that turn. Moving on.');
+            speak('I did not detect that movement. Moving on.');
         }
         await wait(1000);
 
