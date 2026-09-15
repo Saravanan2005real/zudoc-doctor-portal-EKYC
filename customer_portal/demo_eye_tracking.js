@@ -25,7 +25,8 @@ async function startDemo() {
     loadingMsg.classList.remove('hidden');
     
     try {
-        // Initialize WebGazer
+        // Initialize WebGazer with all video preview and UI overlays disabled
+        webgazer.params.showVideo = false;
         webgazer.params.showVideoPreview = false;
         webgazer.params.showFaceOverlay = false;
         webgazer.params.showFaceFeedbackBox = false;
@@ -35,13 +36,29 @@ async function startDemo() {
             .setTracker('TFFacemesh')
             .begin();
 
+        // Enforce hiding of all WebGazer video and preview elements
+        if (typeof webgazer.showVideoPreview === 'function') webgazer.showVideoPreview(false);
+        if (typeof webgazer.showVideo === 'function') webgazer.showVideo(false);
+        if (typeof webgazer.showFaceOverlay === 'function') webgazer.showFaceOverlay(false);
+        if (typeof webgazer.showFaceFeedbackBox === 'function') webgazer.showFaceFeedbackBox(false);
+
         document.getElementById('intro-card').classList.add('hidden');
 
-        // Ensure the video container is hidden so it doesn't block dots
-        const vidContainer = document.getElementById('webgazerVideoContainer');
-        if (vidContainer) {
-            vidContainer.style.display = 'none';
-        }
+        // Ensure video container is sent completely offscreen and invisible
+        const hideVidContainer = () => {
+            const vidContainer = document.getElementById('webgazerVideoContainer');
+            if (vidContainer) {
+                vidContainer.style.setProperty('position', 'fixed', 'important');
+                vidContainer.style.setProperty('top', '-9999px', 'important');
+                vidContainer.style.setProperty('left', '-9999px', 'important');
+                vidContainer.style.setProperty('opacity', '0', 'important');
+                vidContainer.style.setProperty('visibility', 'hidden', 'important');
+                vidContainer.style.setProperty('pointer-events', 'none', 'important');
+                vidContainer.style.setProperty('border', 'none', 'important');
+            }
+        };
+        hideVidContainer();
+        setInterval(hideVidContainer, 500);
 
         startCalibration();
     } catch (err) {
