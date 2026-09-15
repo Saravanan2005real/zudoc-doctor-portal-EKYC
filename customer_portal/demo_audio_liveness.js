@@ -233,11 +233,13 @@ function waitForSpecificTurn(direction, baselineYaw, baselinePitch, timeoutMs) {
 
                 // For strict checking, we ensure they only turn the requested way
                 if (direction === 'left') {
-                    isTurned = deltaYaw < -AUDIO_YAW_THRESHOLD;
+                    // nose.x increases as user turns to their physical left (right side of camera image)
+                    isTurned = deltaYaw > AUDIO_YAW_THRESHOLD;
                     isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.4;
                     currentVal = Math.abs(deltaYaw);
                 } else if (direction === 'right') {
-                    isTurned = deltaYaw > AUDIO_YAW_THRESHOLD;
+                    // nose.x decreases as user turns to their physical right (left side of camera image)
+                    isTurned = deltaYaw < -AUDIO_YAW_THRESHOLD;
                     isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.4;
                     currentVal = Math.abs(deltaYaw);
                 } else if (direction === 'up') {
