@@ -412,9 +412,11 @@ async function startAudioLiveness() {
         
         if (!faceFound) {
             announce('Face not detected.', 'Could not find your face');
-            speak('I could not find your face. Please make sure the camera is not covered.');
+            speak('I could not find your face. The verification will now terminate.');
             chime.fail();
             await wait(2500);
+            showResults('NOT_CONFIRMED', checks, 0);
+            return;
         } else {
             chime.ok();
             announce('Please look straight forward at the camera.', 'Calibrating center position…');
@@ -453,7 +455,11 @@ async function startAudioLiveness() {
         } else {
             chime.fail();
             renderAudioSteps(3, 0, 1);
-            speak('I did not detect that movement. Let us continue.');
+            announce('Failed to verify movement.', 'Verification Failed');
+            speak('I did not detect the correct movement. The verification will now terminate.');
+            await wait(2000);
+            showResults('NOT_CONFIRMED', checks, 0);
+            return;
         }
         await wait(1000);
 
@@ -484,7 +490,11 @@ async function startAudioLiveness() {
             speak('Perfect.');
         } else {
             chime.fail();
-            speak('I did not detect that movement. Moving on.');
+            announce('Failed to verify movement.', 'Verification Failed');
+            speak('I did not detect the correct movement. The verification will now terminate.');
+            await wait(2000);
+            showResults('NOT_CONFIRMED', checks, 0);
+            return;
         }
         await wait(1000);
 
