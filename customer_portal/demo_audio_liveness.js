@@ -147,7 +147,8 @@ function currentYaw() {
     //   ⇒ leftZ - rightZ  becomes MORE POSITIVE
     // Turn RIGHT → right cheek goes away (z↑), left cheek comes forward (z↓)
     //   ⇒ leftZ - rightZ  becomes MORE NEGATIVE
-    const yaw = leftZ - rightZ;
+    // Empirically confirmed: negate so positive = user's LEFT, negative = user's RIGHT
+    const yaw = -(leftZ - rightZ);
 
     // Debug: log to console so we can verify direction mapping
     if (window._debugYaw) {
