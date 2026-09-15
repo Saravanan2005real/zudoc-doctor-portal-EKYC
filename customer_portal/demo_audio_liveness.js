@@ -1,5 +1,5 @@
 // Audio Liveness Constants
-const AUDIO_YAW_THRESHOLD = 0.15;
+const AUDIO_YAW_THRESHOLD = 0.025;  // z-depth based, much smaller scale
 const AUDIO_PITCH_THRESHOLD = 0.12;
 const AUDIO_TURN_TIMEOUT_MS = 14000;
 const AUDIO_BLINK_TARGET = 2;
@@ -121,29 +121,41 @@ async function processVideoFrame(videoElement) {
     requestAnimationFrame(() => processVideoFrame(videoElement));
 }
 
-// Geometric calculations
+// Geometric calculations — z-depth based yaw (mirror-invariant)
 function currentYaw() {
     if (!currentLandmarks || currentLandmarks.length < 468) return null;
     const lm = currentLandmarks;
-    const nose = lm[1];
-    const lOuter = lm[33];
-    const rOuter = lm[263];
-    if (!nose || !lOuter || !rOuter) return null;
 
-    const midEyeX = (lOuter.x + rOuter.x) / 2;
-    const iod = Math.max(1e-4, Math.hypot(rOuter.x - lOuter.x, rOuter.y - lOuter.y));
-    const eyeYaw = (nose.x - midEyeX) / iod;
-
+    // User's left cheek and right cheek landmarks
     const lCheek = lm[234];
     const rCheek = lm[454];
-    if (lCheek && rCheek) {
-        const dLeft = Math.hypot(nose.x - lCheek.x, nose.y - lCheek.y);
-        const dRight = Math.hypot(nose.x - rCheek.x, nose.y - rCheek.y);
-        const cheekYaw = (dLeft - dRight) / Math.max(1e-4, dRight + dLeft);
-        const combined = 0.5 * eyeYaw + 0.5 * cheekYaw;
-        return Number.isFinite(combined) ? combined : eyeYaw;
+    const lTemple = lm[127];
+    const rTemple = lm[356];
+    if (!lCheek || !rCheek) return null;
+
+    // Average multiple depth points for stability
+    let leftZ = lCheek.z;
+    let rightZ = rCheek.z;
+    if (lTemple && rTemple) {
+        leftZ = (lCheek.z + lTemple.z) / 2;
+        rightZ = (rCheek.z + rTemple.z) / 2;
     }
-    return Number.isFinite(eyeYaw) ? eyeYaw : null;
+
+    // Z-depth logic (MIRROR INVARIANT):
+    // Smaller z = closer to camera.  Larger z = farther from camera.
+    // Turn LEFT  → left cheek goes away (z↑), right cheek comes forward (z↓)
+    //   ⇒ leftZ - rightZ  becomes MORE POSITIVE
+    // Turn RIGHT → right cheek goes away (z↑), left cheek comes forward (z↓)
+    //   ⇒ leftZ - rightZ  becomes MORE NEGATIVE
+    const yaw = leftZ - rightZ;
+
+    // Debug: log to console so we can verify direction mapping
+    if (window._debugYaw) {
+        const el = document.getElementById('debug-yaw');
+        if (el) el.textContent = `Yaw: ${yaw.toFixed(4)}`;
+    }
+
+    return Number.isFinite(yaw) ? yaw : null;
 }
 
 function currentPitch() {
@@ -231,14 +243,13 @@ function waitForSpecificTurn(direction, baselineYaw, baselinePitch, timeoutMs) {
                 let isReturned = false;
                 let currentVal = 0;
 
-                // For strict checking, we ensure they only turn the requested way
+                // For strict checking using z-depth yaw:
+                // deltaYaw > 0 = turned LEFT,  deltaYaw < 0 = turned RIGHT
                 if (direction === 'left') {
-                    // nose.x increases as user turns to their physical left (right side of camera image)
                     isTurned = deltaYaw > AUDIO_YAW_THRESHOLD;
                     isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.4;
                     currentVal = Math.abs(deltaYaw);
                 } else if (direction === 'right') {
-                    // nose.x decreases as user turns to their physical right (left side of camera image)
                     isTurned = deltaYaw < -AUDIO_YAW_THRESHOLD;
                     isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.4;
                     currentVal = Math.abs(deltaYaw);
@@ -360,7 +371,7 @@ function waitForFace(timeoutMs) {
 function waitForCenter(timeoutMs) {
     return new Promise((resolve) => {
         const t0 = performance.now();
-        const MAX_YAW = 0.05; // Strict straight look horizontally
+        const MAX_YAW = 0.012; // z-depth scale, strict straight look
         
         const tick = () => {
             const yaw = currentYaw();

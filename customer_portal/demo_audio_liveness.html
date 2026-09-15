@@ -117,7 +117,37 @@
         <button class="btn-start" onclick="location.reload()" style="margin-top: 30px;">Try Again</button>
     </div>
 
+    <!-- Debug overlay to verify direction detection -->
+    <div id="debug-overlay" style="position:fixed;top:10px;right:10px;z-index:99999;background:rgba(0,0,0,0.85);color:#0f0;font-family:monospace;font-size:14px;padding:12px 16px;border-radius:8px;border:1px solid #333;pointer-events:none;">
+        <div id="debug-yaw">Yaw: --</div>
+        <div id="debug-pitch">Pitch: --</div>
+        <div id="debug-dir" style="color:#ff0;margin-top:4px;">Dir: --</div>
+    </div>
+
     <script src="mediapipe/face_mesh/face_mesh.js"></script>
     <script src="demo_audio_liveness.js"></script>
+    <script>
+        // Enable debug display
+        window._debugYaw = true;
+        // Live update debug overlay
+        setInterval(() => {
+            if (typeof currentYaw === 'function' && typeof currentPitch === 'function') {
+                const y = currentYaw();
+                const p = currentPitch();
+                const yEl = document.getElementById('debug-yaw');
+                const pEl = document.getElementById('debug-pitch');
+                const dEl = document.getElementById('debug-dir');
+                if (yEl && y != null) yEl.textContent = `Yaw: ${y.toFixed(4)}`;
+                if (pEl && p != null) pEl.textContent = `Pitch: ${p.toFixed(4)}`;
+                if (dEl && y != null) {
+                    let dir = 'CENTER';
+                    if (y > 0.025) dir = '← LEFT';
+                    else if (y < -0.025) dir = '→ RIGHT';
+                    dEl.textContent = `Dir: ${dir}`;
+                    dEl.style.color = dir === 'CENTER' ? '#0f0' : '#ff0';
+                }
+            }
+        }, 100);
+    </script>
 </body>
 </html>
