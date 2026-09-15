@@ -31,6 +31,7 @@ async function startDemo() {
         webgazer.params.showFaceOverlay = false;
         webgazer.params.showFaceFeedbackBox = false;
         webgazer.params.showGazeDot = false; // We use our own reticle after calibration
+        webgazer.params.dataTimestep = 20; // 50Hz high sampling rate for smooth movement
         
         await webgazer.setRegression('ridge')
             .setTracker('TFFacemesh')
@@ -138,6 +139,13 @@ function checkCalibrationComplete() {
     }
 }
 
+let targetGazeX = window.innerWidth / 2;
+let targetGazeY = window.innerHeight / 2;
+let currentReticleX = window.innerWidth / 2;
+let currentReticleY = window.innerHeight / 2;
+let hasReceivedGaze = false;
+let reticleRenderStarted = false;
+
 function finishCalibration() {
     calibrationFinished = true;
     document.getElementById('calOverlay').classList.add('hidden');
@@ -150,111 +158,187 @@ function finishCalibration() {
     const reticle = document.getElementById('gazeReticle');
     reticle.style.display = 'block';
     
-    // Start listening for gaze
+    // Start listening for gaze predictions directly
     webgazer.setGazeListener((data, elapsedTime) => {
         if (!data || !calibrationFinished) return;
-        
-        reticle.style.left = `${data.x}px`;
-        reticle.style.top = `${data.y}px`;
+        if (typeof data.x === 'number' && typeof data.y === 'number' && !isNaN(data.x) && !isNaN(data.y)) {
+            targetGazeX = data.x;
+            targetGazeY = data.y;
+            if (!hasReceivedGaze) {
+                currentReticleX = data.x;
+                currentReticleY = data.y;
+                hasReceivedGaze = true;
+            }
+        }
     });
+
+    // Start 60fps buttery-smooth reticle interpolation
+    if (!reticleRenderStarted) {
+        reticleRenderStarted = true;
+        const animateReticle = () => {
+            if (calibrationFinished) {
+                // Responsive smoothing: 0.35 factor ensures rapid, smooth response without lag
+                currentReticleX += (targetGazeX - currentReticleX) * 0.35;
+                currentReticleY += (targetGazeY - currentReticleY) * 0.35;
+                reticle.style.transform = `translate3d(${currentReticleX}px, ${currentReticleY}px, 0) translate(-50%, -50%)`;
+            }
+            requestAnimationFrame(animateReticle);
+        };
+        requestAnimationFrame(animateReticle);
+    }
 
     // Run verification challenge
     startChallenge();
 }
 
-function randomDotPosition(index) {
-  const zones = [{ x: 0.28, y: 0.32 }, { x: 0.72, y: 0.32 }, { x: 0.5, y: 0.5 }, { x: 0.28, y: 0.7 }, { x: 0.72, y: 0.7 }];
-  const zone = zones[index % zones.length];
-  const jitterX = (Math.random() - 0.5) * 0.12;
-  const jitterY = (Math.random() - 0.5) * 0.1;
-  return { 
-      x: Math.min(0.85, Math.max(0.15, zone.x + jitterX)) * window.innerWidth, 
-      y: Math.min(0.82, Math.max(0.22, zone.y + jitterY)) * window.innerHeight 
-  };
+function getComfortableDotPosition(index) {
+    // 4 distinct comfortable quadrants with safe margins away from screen borders
+    const positions = [
+        { x: 0.32, y: 0.35 },
+        { x: 0.68, y: 0.35 },
+        { x: 0.32, y: 0.65 },
+        { x: 0.68, y: 0.65 }
+    ];
+    const base = positions[index % positions.length];
+    const jitterX = (Math.random() - 0.5) * 0.08;
+    const jitterY = (Math.random() - 0.5) * 0.08;
+    return {
+        x: (base.x + jitterX) * window.innerWidth,
+        y: (base.y + jitterY) * window.innerHeight
+    };
 }
 
-function startChallenge() {
-    const CHALLENGE_COUNT = 5;
-    const CHALLENGE_DURATION_MS = 2000;
-    const GAZE_HIT_RATIO = 0.6;
+async function startChallenge() {
+    const TOTAL_DOTS = 4;
+    const CHALLENGE_DURATION_MS = 4000; // Exactly 4.0 seconds per target dot
+    const REQUIRED_IN_RADIUS_MS = 1000; // 1.0 second total within the radius confirms valid tracking
     
-    const gazeHitRadius = () => Math.max(150, window.innerWidth * 0.1); 
+    // Generous, comfortable radius around the target dot (approx 200px - 250px)
+    const TARGET_RADIUS = Math.max(190, Math.min(window.innerWidth, window.innerHeight) * 0.24);
+    
+    const challengeHud = document.getElementById('challengeHud');
+    const challengeStepTitle = document.getElementById('challengeStepTitle');
+    const challengeTimer = document.getElementById('challengeTimer');
+    const reticle = document.getElementById('gazeReticle');
+    
+    challengeHud.classList.remove('hidden');
 
+    // Create the visual radius zone (circular dashed boundary)
+    const radiusZone = document.createElement('div');
+    radiusZone.id = 'targetRadiusZone';
+    radiusZone.style.position = 'fixed';
+    radiusZone.style.width = `${TARGET_RADIUS * 2}px`;
+    radiusZone.style.height = `${TARGET_RADIUS * 2}px`;
+    radiusZone.style.borderRadius = '50%';
+    radiusZone.style.border = '2px dashed rgba(45, 212, 191, 0.4)';
+    radiusZone.style.backgroundColor = 'rgba(45, 212, 191, 0.05)';
+    radiusZone.style.pointerEvents = 'none';
+    radiusZone.style.zIndex = '9997';
+    radiusZone.style.transform = 'translate(-50%, -50%)';
+    radiusZone.style.transition = 'border-color 0.2s, background-color 0.2s';
+    document.body.appendChild(radiusZone);
+
+    // Create the center target dot
     const target = document.createElement('div');
+    target.id = 'challengeTargetDot';
     target.style.position = 'fixed';
-    target.style.width = '60px';
-    target.style.height = '60px';
+    target.style.width = '48px';
+    target.style.height = '48px';
     target.style.backgroundColor = '#f59e0b';
     target.style.borderRadius = '50%';
     target.style.zIndex = '9998';
-    target.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.6)';
+    target.style.pointerEvents = 'none';
+    target.style.transform = 'translate(-50%, -50%)';
+    target.style.boxShadow = '0 0 20px rgba(245, 158, 11, 0.6)';
+    target.style.transition = 'background-color 0.2s, box-shadow 0.2s';
     document.body.appendChild(target);
 
-    let gazePasses = 0;
-    
-    async function runAllChallenges() {
-        for (let i = 0; i < CHALLENGE_COUNT; i++) {
-            const pos = randomDotPosition(i);
-            target.style.left = `${pos.x}px`;
-            target.style.top = `${pos.y}px`;
-            target.style.transform = 'translate(-50%, -50%)';
-            target.style.backgroundColor = '#f59e0b';
-            
-            // Wait 1 second to settle gaze
-            await new Promise(r => setTimeout(r, 1000));
-            
-            // Run challenge and measure samples just like the doctor portal
-            const passed = await new Promise((resolve) => {
-                let hits = 0;
-                let samples = 0;
-                let sumDist = 0;
-                const radius = gazeHitRadius();
-                const t0 = performance.now();
-                
-                const tick = () => {
-                    const elapsed = performance.now() - t0;
-                    const pred = webgazer.getCurrentPrediction();
-                    if (pred) {
-                        samples++;
-                        const d = Math.hypot(pred.x - pos.x, pred.y - pos.y);
-                        sumDist += d;
-                        if (d <= radius) {
-                            hits++;
-                            target.style.backgroundColor = '#10b981';
-                        } else {
-                            target.style.backgroundColor = '#f59e0b';
-                        }
-                    }
-                    
-                    if (elapsed >= CHALLENGE_DURATION_MS) {
-                        const gazeRatio = samples ? hits / samples : 0;
-                        const avgDist = samples ? sumDist / samples : Infinity;
-                        
-                        // Exact mathematical logic from doctor portal (gazeOk)
-                        const gazeOk = samples >= 8 && (gazeRatio >= GAZE_HIT_RATIO || avgDist <= radius * 1.15);
-                        resolve(gazeOk);
-                        return;
-                    }
-                    requestAnimationFrame(tick);
-                };
+    let dotsPassed = 0;
+
+    for (let i = 0; i < TOTAL_DOTS; i++) {
+        const pos = getComfortableDotPosition(i);
+        
+        // Position target dot & radius circle
+        target.style.left = `${pos.x}px`;
+        target.style.top = `${pos.y}px`;
+        target.style.backgroundColor = '#f59e0b';
+        target.style.boxShadow = '0 0 20px rgba(245, 158, 11, 0.6)';
+
+        radiusZone.style.left = `${pos.x}px`;
+        radiusZone.style.top = `${pos.y}px`;
+        radiusZone.style.borderColor = 'rgba(45, 212, 191, 0.4)';
+        radiusZone.style.backgroundColor = 'rgba(45, 212, 191, 0.05)';
+
+        challengeStepTitle.textContent = `Follow the Target Dot (${i + 1} / ${TOTAL_DOTS})`;
+        challengeTimer.textContent = '4.0s';
+        reticle.classList.remove('in-radius');
+
+        // Settle delay: 0.8 seconds to look at the new dot position
+        await new Promise(r => setTimeout(r, 800));
+
+        // Track gaze for exactly 4.0 seconds
+        const dotSuccess = await new Promise((resolve) => {
+            const startTime = performance.now();
+            let accumulatedInRadiusMs = 0;
+            let lastTick = startTime;
+
+            const tick = (now) => {
+                const dt = now - lastTick;
+                lastTick = now;
+                const elapsed = now - startTime;
+                const remaining = Math.max(0, (CHALLENGE_DURATION_MS - elapsed) / 1000);
+                challengeTimer.textContent = `${remaining.toFixed(1)}s`;
+
+                // Calculate distance from current gaze reticle position to target center
+                const distToTarget = Math.hypot(currentReticleX - pos.x, currentReticleY - pos.y);
+                const insideRadius = distToTarget <= TARGET_RADIUS;
+
+                if (insideRadius) {
+                    accumulatedInRadiusMs += dt;
+                    radiusZone.style.borderColor = 'rgba(16, 185, 129, 0.8)';
+                    radiusZone.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
+                    target.style.backgroundColor = '#10b981';
+                    target.style.boxShadow = '0 0 25px rgba(16, 185, 129, 0.8)';
+                    reticle.classList.add('in-radius');
+                } else {
+                    radiusZone.style.borderColor = 'rgba(45, 212, 191, 0.4)';
+                    radiusZone.style.backgroundColor = 'rgba(45, 212, 191, 0.05)';
+                    target.style.backgroundColor = '#f59e0b';
+                    target.style.boxShadow = '0 0 20px rgba(245, 158, 11, 0.6)';
+                    reticle.classList.remove('in-radius');
+                }
+
+                if (elapsed >= CHALLENGE_DURATION_MS) {
+                    // Valid if pupil spent at least REQUIRED_IN_RADIUS_MS inside the target radius
+                    const passed = accumulatedInRadiusMs >= REQUIRED_IN_RADIUS_MS;
+                    resolve(passed);
+                    return;
+                }
+
                 requestAnimationFrame(tick);
-            });
-            
-            if (passed) gazePasses++;
+            };
+
+            requestAnimationFrame(tick);
+        });
+
+        if (dotSuccess) {
+            dotsPassed++;
         }
-        
-        target.remove();
-        document.getElementById('gazeReticle').style.display = 'none';
-        
-        // Doctor portal checks if you pass at least 60% of the challenges
-        const accuracy = gazePasses / CHALLENGE_COUNT;
-        showVerdict(accuracy);
     }
-    
-    runAllChallenges();
+
+    // Clean up UI elements
+    radiusZone.remove();
+    target.remove();
+    challengeHud.classList.add('hidden');
+    reticle.style.display = 'none';
+    reticle.classList.remove('in-radius');
+
+    // Evaluate result: at least 50% (2 of 4) passed confirms live human eye movement
+    const accuracy = dotsPassed / TOTAL_DOTS;
+    showVerdict(accuracy, dotsPassed, TOTAL_DOTS);
 }
 
-function showVerdict(accuracy) {
+function showVerdict(accuracy, dotsPassed, totalDots) {
     webgazer.pause();
     const overlay = document.getElementById('challengeOverlay');
     const title = document.getElementById('verdict-title');
@@ -262,13 +346,13 @@ function showVerdict(accuracy) {
     
     overlay.classList.remove('hidden');
     
-    if (accuracy > 0.6) {
+    if (accuracy >= 0.5) {
         title.textContent = '✅ Liveness Confirmed';
         title.style.color = '#10b981';
-        text.textContent = `Excellent eye tracking accuracy (${Math.round(accuracy*100)}%). A real person is present.`;
+        text.textContent = `Eye tracking liveness verified (${dotsPassed} of ${totalDots} targets tracked successfully - ${Math.round(accuracy * 100)}%). A real person is present.`;
     } else {
         title.textContent = '❌ Verification Failed';
         title.style.color = '#ef4444';
-        text.textContent = `Poor tracking accuracy (${Math.round(accuracy*100)}%). Could not confirm liveness. Please try again.`;
+        text.textContent = `Tracking accuracy insufficient (${dotsPassed} of ${totalDots} targets inside radius - ${Math.round(accuracy * 100)}%). Please keep your face steady and try again.`;
     }
 }

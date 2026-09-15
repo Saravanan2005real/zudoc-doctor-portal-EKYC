@@ -87,15 +87,25 @@
         }
         #gazeReticle {
             position: fixed;
-            width: 30px;
-            height: 30px;
+            top: 0;
+            left: 0;
+            width: 24px;
+            height: 24px;
             border: 3px solid #2dd4bf;
+            background: rgba(45, 212, 191, 0.35);
+            box-shadow: 0 0 15px #2dd4bf;
             border-radius: 50%;
-            transform: translate(-50%, -50%);
             pointer-events: none;
             z-index: 10000;
             display: none;
-            transition: left 0.1s, top 0.1s;
+            will-change: transform;
+            transform: translate3d(-100px, -100px, 0) translate(-50%, -50%);
+            transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+        }
+        #gazeReticle.in-radius {
+            border-color: #10b981 !important;
+            background: rgba(16, 185, 129, 0.5) !important;
+            box-shadow: 0 0 20px #10b981 !important;
         }
         .hidden { display: none !important; }
     </style>
@@ -116,6 +126,13 @@
             <div id="calProgress" style="color: #2dd4bf; font-weight: bold;">0 / 9 dots</div>
         </div>
         <div id="calLayer"></div>
+    </div>
+
+    <div id="challengeHud" class="cal-hud hidden">
+        <h3 id="challengeStepTitle" style="margin:0 0 4px 0;">Follow the Target Dot (1 / 4)</h3>
+        <div style="font-size: 0.95rem; color: #cbd5e1;">
+            Look inside the circular zone — Time: <span id="challengeTimer" style="color:#2dd4bf; font-weight:bold; font-size:1.1rem;">4.0s</span>
+        </div>
     </div>
     
     <div id="challengeOverlay" class="demo-container hidden">
