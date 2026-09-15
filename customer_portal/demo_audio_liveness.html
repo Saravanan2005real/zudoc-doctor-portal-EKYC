@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verifyyy - Demo Audio Liveness</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; display: flex; align-items: center; justify-content: center;}
+        
+        .demo-container {
+            text-align: center;
+            z-index: 10;
+            background: rgba(15, 23, 42, 0.85);
+            padding: 40px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            max-width: 500px;
+        }
+
+        .hidden { display: none !important; }
+        
+        .btn-start {
+            background: var(--accent-color, #2dd4bf);
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+
+        /* Audio UI specific styles from frontend_portal */
+        #audioOverlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; /* Pure black for visual rest */
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+
+        #audioOverlay h2 { font-size: 2.5rem; margin: 0 0 1rem; color: #2dd4bf; }
+        #audioOverlay .audio-instruction { font-size: 1.5rem; margin-bottom: 2rem; color: #f8fafc; max-width: 600px; line-height: 1.4; }
+        #audioOverlay .audio-status {
+            font-size: 1.1rem;
+            color: #94a3b8;
+            background: rgba(255,255,255,0.1);
+            padding: 8px 16px;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .audio-step-dots {
+            display: flex;
+            gap: 12px;
+            margin-top: 2rem;
+        }
+
+        .audio-step-dots span {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #334155;
+            transition: all 0.3s ease;
+        }
+
+        .audio-step-dots span.active { background: #60a5fa; box-shadow: 0 0 10px #60a5fa; transform: scale(1.2); }
+        .audio-step-dots span.done { background: #2dd4bf; box-shadow: 0 0 10px #2dd4bf; }
+        
+        #hiddenVideo {
+            position: absolute;
+            top: -9999px;
+            left: -9999px;
+            opacity: 0;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    
+    <video id="hiddenVideo" autoplay playsinline muted></video>
+
+    <div id="intro-card" class="demo-container">
+        <h2 style="margin-top:0; font-family: 'Outfit', sans-serif;">Audio-Guided Verification</h2>
+        <p style="color: #cbd5e1; line-height: 1.6; margin-bottom: 30px;">
+            This module verifies liveness entirely through audio prompts, requiring head movements and blinks. It's fully accessible for visually impaired users.
+        </p>
+        <div id="loading-msg" class="hidden" style="color: #94a3b8; margin-bottom: 20px;">Initializing camera and AI models...</div>
+        <button id="start-btn" class="btn-start" onclick="startAudioLiveness()">Start Verification</button>
+    </div>
+
+    <!-- Audio overlay shown during verification -->
+    <div id="audioOverlay" class="hidden" role="dialog" aria-label="Audio guided liveness check">
+        <h2 id="audioTitle">Audio verification</h2>
+        <p id="audioInstruction" class="audio-instruction">Listen to the spoken instructions.</p>
+        <div id="audioStatus" class="audio-status" aria-live="assertive" role="status">Preparing…</div>
+        <div id="audioStepDots" class="audio-step-dots" aria-hidden="true"></div>
+    </div>
+
+    <!-- Results overlay -->
+    <div id="resultsOverlay" class="demo-container hidden">
+        <h2 id="verdictTitle" style="margin-top:0; font-family: 'Outfit', sans-serif; font-size: 2rem;"></h2>
+        <p id="confidenceText" style="color: #cbd5e1; margin-bottom: 20px; font-size: 1.1rem;"></p>
+        <div id="checksList" style="text-align: left; margin-top: 20px; background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px;"></div>
+        <button class="btn-start" onclick="location.reload()" style="margin-top: 30px;">Try Again</button>
+    </div>
+
+    <script src="mediapipe/face_mesh/face_mesh.js"></script>
+    <script src="demo_audio_liveness.js"></script>
+</body>
+</html>
