@@ -139,7 +139,7 @@ function currentYaw() {
     if (lCheek && rCheek) {
         const dLeft = Math.hypot(nose.x - lCheek.x, nose.y - lCheek.y);
         const dRight = Math.hypot(nose.x - rCheek.x, nose.y - rCheek.y);
-        const cheekYaw = (dRight - dLeft) / Math.max(1e-4, dRight + dLeft);
+        const cheekYaw = (dLeft - dRight) / Math.max(1e-4, dRight + dLeft);
         const combined = 0.5 * eyeYaw + 0.5 * cheekYaw;
         return Number.isFinite(combined) ? combined : eyeYaw;
     }
