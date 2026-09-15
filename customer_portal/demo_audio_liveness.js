@@ -344,6 +344,28 @@ function waitForFace(timeoutMs) {
     });
 }
 
+function waitForCenter(timeoutMs) {
+    return new Promise((resolve) => {
+        const t0 = performance.now();
+        const MAX_YAW = 0.05; // Strict straight look horizontally
+        
+        const tick = () => {
+            const yaw = currentYaw();
+            if (yaw != null && Math.abs(yaw) < MAX_YAW) {
+                // To prevent capturing a blink or blur frame, require at least some stability or just resolve immediately
+                resolve(true);
+                return;
+            }
+            if (performance.now() - t0 >= timeoutMs) {
+                resolve(false);
+                return;
+            }
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    });
+}
+
 
 // Main Pipeline
 async function startAudioLiveness() {
@@ -395,8 +417,17 @@ async function startAudioLiveness() {
             await wait(2500);
         } else {
             chime.ok();
-            announce('Hold still facing the camera.', 'Calibrating center position…');
-            speak('Thank you, I can see you. Hold still facing forward.');
+            announce('Please look straight forward at the camera.', 'Calibrating center position…');
+            speak('Thank you. Please look straight at the camera to calibrate.');
+            
+            const centered = await waitForCenter(6000);
+            if (!centered) {
+                announce('Could not verify straight face.', 'Calibration warning');
+                speak('I could not verify you are looking straight, but we will proceed with your current position.');
+            } else {
+                chime.ok();
+                speak('Perfect.');
+            }
             await wait(1200);
         }
 
@@ -423,7 +454,9 @@ async function startAudioLiveness() {
         await wait(1000);
 
         // Re-center
-        announce('Face forward for the next check.', 'Centering…');
+        announce('Please look straight forward again.', 'Centering…');
+        speak('Please look straight forward again.');
+        await waitForCenter(5000);
         const baselineYaw2 = await measureBaselineYaw(500);
         const baselinePitch2 = await measureBaselinePitch(500);
 
