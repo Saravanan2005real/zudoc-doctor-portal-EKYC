@@ -1,6 +1,5 @@
 const availableModules = [
-    { id: 'ocr', name: 'Document OCR', desc: 'Extract data from Aadhaar, PAN, and passports.' },
-    { id: 'liveness', name: 'Liveness Detection', desc: 'Verify user presence via eye-tracking or video.' },
+    { id: 'ocr_liveness', name: 'OCR & Live Face Detection', desc: 'Extract data from IDs and verify the person is real via live capture.' },
     { id: 'cross_match', name: 'Cross-Matching', desc: 'Match face and extracted data for high confidence.' },
     { id: 'fraud_analysis', name: 'Fraud Analysis', desc: 'Deep scan for tampering, deepfakes, and synthetic media.' }
 ];
@@ -47,10 +46,8 @@ function renderAvailableModules() {
 // Add to Pipeline
 function addModuleToPipeline(mod) {
     let defaultConfig = {};
-    if (mod.id === 'ocr') {
-        defaultConfig = { aadhaar: true, pan: true, passport: false, company: false, gst: false };
-    } else if (mod.id === 'liveness') {
-        defaultConfig = { mode: 'eye_tracking' };
+    if (mod.id === 'ocr_liveness') {
+        defaultConfig = { aadhaar: true, pan: true, passport: false, company: false, gst: false, liveness_mode: 'eye_tracking' };
     } else if (mod.id === 'cross_match') {
         defaultConfig = { match_face: true, match_name: true };
     } else if (mod.id === 'fraud_analysis') {
@@ -121,19 +118,19 @@ function openConfigModal(uniqueId) {
     let html = '<div class="config-group">';
     const c = mod.config || {};
     
-    if (mod.id === 'ocr') {
+    if (mod.id === 'ocr_liveness') {
         html += `
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Document Types</p>
             <label class="config-label"><input type="checkbox" id="cfg-aadhaar" ${c.aadhaar ? 'checked' : ''}> Aadhaar (UIDAI)</label>
             <label class="config-label"><input type="checkbox" id="cfg-pan" ${c.pan ? 'checked' : ''}> PAN Card</label>
             <label class="config-label"><input type="checkbox" id="cfg-passport" ${c.passport ? 'checked' : ''}> Passport</label>
             <label class="config-label"><input type="checkbox" id="cfg-company" ${c.company ? 'checked' : ''}> Company Certificate</label>
             <label class="config-label"><input type="checkbox" id="cfg-gst" ${c.gst ? 'checked' : ''}> GST Certificate</label>
-        `;
-    } else if (mod.id === 'liveness') {
-        html += `
-            <label class="config-label"><input type="radio" name="cfg-live-mode" value="eye_tracking" ${c.mode === 'eye_tracking' ? 'checked' : ''}> Eye Tracking</label>
-            <label class="config-label"><input type="radio" name="cfg-live-mode" value="audio_guided" ${c.mode === 'audio_guided' ? 'checked' : ''}> Audio Guided</label>
-            <label class="config-label"><input type="radio" name="cfg-live-mode" value="video" ${c.mode === 'video' ? 'checked' : ''}> Passive Video</label>
+            <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Liveness Mode</p>
+            <label class="config-label"><input type="radio" name="cfg-live-mode" value="eye_tracking" ${c.liveness_mode === 'eye_tracking' ? 'checked' : ''}> Eye Tracking</label>
+            <label class="config-label"><input type="radio" name="cfg-live-mode" value="audio_guided" ${c.liveness_mode === 'audio_guided' ? 'checked' : ''}> Audio Guided</label>
+            <label class="config-label"><input type="radio" name="cfg-live-mode" value="video" ${c.liveness_mode === 'video' ? 'checked' : ''}> Passive Video</label>
         `;
     } else if (mod.id === 'cross_match') {
         html += `
@@ -162,17 +159,14 @@ saveConfigBtn.addEventListener('click', () => {
     const mod = pipeline.find(m => m.uniqueId === currentConfigModuleId);
     if (!mod) return;
     
-    if (mod.id === 'ocr') {
+    if (mod.id === 'ocr_liveness') {
         mod.config = {
             aadhaar: document.getElementById('cfg-aadhaar').checked,
             pan: document.getElementById('cfg-pan').checked,
             passport: document.getElementById('cfg-passport').checked,
             company: document.getElementById('cfg-company').checked,
-            gst: document.getElementById('cfg-gst').checked
-        };
-    } else if (mod.id === 'liveness') {
-        mod.config = {
-            mode: document.querySelector('input[name="cfg-live-mode"]:checked').value
+            gst: document.getElementById('cfg-gst').checked,
+            liveness_mode: document.querySelector('input[name="cfg-live-mode"]:checked').value
         };
     } else if (mod.id === 'cross_match') {
         mod.config = {
