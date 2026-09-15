@@ -1,6 +1,6 @@
 // Audio Liveness Constants
-const AUDIO_YAW_THRESHOLD = 0.10;
-const AUDIO_PITCH_THRESHOLD = 0.08;
+const AUDIO_YAW_THRESHOLD = 0.15;
+const AUDIO_PITCH_THRESHOLD = 0.12;
 const AUDIO_TURN_TIMEOUT_MS = 14000;
 const AUDIO_BLINK_TARGET = 2;
 const AUDIO_BLINK_TIMEOUT_MS = 14000;
@@ -217,6 +217,8 @@ function waitForSpecificTurn(direction, baselineYaw, baselinePitch, timeoutMs) {
         const t0 = performance.now();
         let turned = false;
         let peakValue = 0;
+        let turnHoldFrames = 0;
+        let returnHoldFrames = 0;
 
         const tick = () => {
             const yaw = currentYaw();
@@ -231,37 +233,46 @@ function waitForSpecificTurn(direction, baselineYaw, baselinePitch, timeoutMs) {
 
                 // For strict checking, we ensure they only turn the requested way
                 if (direction === 'left') {
-                    // yaw < 0 means nose moved left relative to eyes (user turned head right from our perspective, so they turned left)
                     isTurned = deltaYaw < -AUDIO_YAW_THRESHOLD;
-                    isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.5;
+                    isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.4;
                     currentVal = Math.abs(deltaYaw);
                 } else if (direction === 'right') {
                     isTurned = deltaYaw > AUDIO_YAW_THRESHOLD;
-                    isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.5;
+                    isReturned = Math.abs(deltaYaw) <= AUDIO_YAW_THRESHOLD * 0.4;
                     currentVal = Math.abs(deltaYaw);
                 } else if (direction === 'up') {
                     isTurned = deltaPitch < -AUDIO_PITCH_THRESHOLD;
-                    isReturned = Math.abs(deltaPitch) <= AUDIO_PITCH_THRESHOLD * 0.5;
+                    isReturned = Math.abs(deltaPitch) <= AUDIO_PITCH_THRESHOLD * 0.4;
                     currentVal = Math.abs(deltaPitch);
                 } else if (direction === 'down') {
                     isTurned = deltaPitch > AUDIO_PITCH_THRESHOLD;
-                    isReturned = Math.abs(deltaPitch) <= AUDIO_PITCH_THRESHOLD * 0.5;
+                    isReturned = Math.abs(deltaPitch) <= AUDIO_PITCH_THRESHOLD * 0.4;
                     currentVal = Math.abs(deltaPitch);
                 }
 
                 if (!turned) {
                     if (isTurned) {
-                        turned = true;
-                        peakValue = currentVal;
-                        chime.next();
-                        announce('Good turn detected! Now return to the centre.', 'Turn detected — Face forward');
-                        speak('Good. Now face forward again.');
+                        turnHoldFrames++;
+                        if (turnHoldFrames >= 10) {
+                            turned = true;
+                            peakValue = currentVal;
+                            chime.next();
+                            announce('Good turn detected! Now return to the centre.', 'Turn detected — Face forward');
+                            speak('Good. Now face forward again.');
+                        }
+                    } else {
+                        turnHoldFrames = 0; // reset if they drop out of threshold
                     }
                 } else {
                     if (currentVal > peakValue) peakValue = currentVal;
                     if (isReturned) {
-                        resolve({ ok: true, direction });
-                        return;
+                        returnHoldFrames++;
+                        if (returnHoldFrames >= 10) {
+                            resolve({ ok: true, direction });
+                            return;
+                        }
+                    } else {
+                        returnHoldFrames = 0;
                     }
                 }
             }
