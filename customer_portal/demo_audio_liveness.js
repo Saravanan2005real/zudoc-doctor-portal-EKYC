@@ -422,8 +422,12 @@ async function startAudioLiveness() {
             
             const centered = await waitForCenter(6000);
             if (!centered) {
-                announce('Could not verify straight face.', 'Calibration warning');
-                speak('I could not verify you are looking straight, but we will proceed with your current position.');
+                announce('Could not verify straight face.', 'Calibration Failed');
+                speak('I could not verify you are looking straight. The verification will now terminate.');
+                chime.fail();
+                await wait(2000);
+                showResults('NOT_CONFIRMED', checks, 0);
+                return;
             } else {
                 chime.ok();
                 speak('Perfect.');
@@ -456,7 +460,15 @@ async function startAudioLiveness() {
         // Re-center
         announce('Please look straight forward again.', 'Centering…');
         speak('Please look straight forward again.');
-        await waitForCenter(5000);
+        const centered2 = await waitForCenter(5000);
+        if (!centered2) {
+            announce('Could not verify straight face.', 'Verification Failed');
+            speak('I could not verify you returned to the centre. The verification will now terminate.');
+            chime.fail();
+            await wait(2000);
+            showResults('NOT_CONFIRMED', checks, 0);
+            return;
+        }
         const baselineYaw2 = await measureBaselineYaw(500);
         const baselinePitch2 = await measureBaselinePitch(500);
 
