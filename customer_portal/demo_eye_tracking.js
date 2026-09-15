@@ -31,9 +31,10 @@ async function startDemo() {
         webgazer.params.showFaceOverlay = false;
         webgazer.params.showFaceFeedbackBox = false;
         webgazer.params.showGazeDot = false; // We use our own reticle after calibration
-        webgazer.params.dataTimestep = 20; // 50Hz high sampling rate for smooth movement
+        webgazer.params.dataTimestep = 16; // ~60Hz high sampling rate for smooth movement
+        webgazer.params.applyKalmanFilter = true; // Built-in Kalman filter for smoother predictions
         
-        await webgazer.setRegression('ridge')
+        await webgazer.setRegression('weightedRidge') // weightedRidge gives more accurate predictions
             .setTracker('TFFacemesh')
             .begin();
 
@@ -95,15 +96,17 @@ function startCalibration() {
         
         let hoverInterval;
         let hoverTime = 0;
-        const REQUIRED_HOVER_TIME = 1500; // 1.5s per dot
+        const REQUIRED_HOVER_TIME = 2500; // 2.5s per dot for richer calibration data
+        const SAMPLE_INTERVAL = 50; // Sample every 50ms = 50 samples per dot
         
         btn.addEventListener('mouseenter', () => {
             if (btn.classList.contains('cal-done')) return;
             
             hoverInterval = setInterval(() => {
-                hoverTime += 100;
-                // Force a recording of this point
+                hoverTime += SAMPLE_INTERVAL;
+                // Record both click and move events for richer training data
                 webgazer.recordScreenPosition(x, y, 'click');
+                webgazer.recordScreenPosition(x, y, 'move');
                 
                 // Visual feedback
                 btn.style.opacity = Math.max(0.2, 1 - (hoverTime / REQUIRED_HOVER_TIME));
@@ -114,7 +117,7 @@ function startCalibration() {
                     btn.style.opacity = '1';
                     checkCalibrationComplete();
                 }
-            }, 100);
+            }, SAMPLE_INTERVAL);
         });
         
         btn.addEventListener('mouseleave', () => {
