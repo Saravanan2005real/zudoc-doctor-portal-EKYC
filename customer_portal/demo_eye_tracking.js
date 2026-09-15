@@ -213,8 +213,8 @@ async function startChallenge() {
     const CHALLENGE_DURATION_MS = 4000; // Exactly 4.0 seconds per target dot
     const REQUIRED_IN_RADIUS_MS = 1000; // 1.0 second total within the radius confirms valid tracking
     
-    // Generous, comfortable radius around the target dot (approx 200px - 250px)
-    const TARGET_RADIUS = Math.max(190, Math.min(window.innerWidth, window.innerHeight) * 0.24);
+    // Target radius decreased by 1/4th (75% of previous size)
+    const TARGET_RADIUS = Math.round(Math.max(190, Math.min(window.innerWidth, window.innerHeight) * 0.24) * 0.75);
     
     const challengeHud = document.getElementById('challengeHud');
     const challengeStepTitle = document.getElementById('challengeStepTitle');
