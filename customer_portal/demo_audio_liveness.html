@@ -55,33 +55,37 @@
             box-shadow: 0 6px 20px rgba(15, 118, 110, 0.3);
         }
 
-        /* Audio UI overlay */
+        /* Audio UI overlay — light theme */
         #audioOverlay {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(15, 23, 42, 0.92);
-            backdrop-filter: blur(20px);
+            background: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(45, 212, 191, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(6, 182, 212, 0.15) 0%, transparent 45%);
             z-index: 9999;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            color: white;
+            color: var(--text-color);
             text-align: center;
             padding: 20px;
         }
 
-        #audioOverlay h2 { font-size: 2.5rem; margin: 0 0 1rem; color: var(--accent-light); font-family: 'Outfit', sans-serif; }
-        #audioOverlay .audio-instruction { font-size: 1.5rem; margin-bottom: 2rem; color: #f8fafc; max-width: 600px; line-height: 1.4; }
+        #audioOverlay h2 { font-size: 2.5rem; margin: 0 0 1rem; color: var(--accent-color); font-family: 'Outfit', sans-serif; font-weight: 800; }
+        #audioOverlay .audio-instruction { font-size: 1.5rem; margin-bottom: 2rem; color: var(--text-color); max-width: 600px; line-height: 1.4; font-weight: 500; }
         #audioOverlay .audio-status {
             font-size: 1.1rem;
-            color: #94a3b8;
-            background: rgba(255,255,255,0.1);
+            color: var(--text-muted);
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
             padding: 8px 16px;
             border-radius: 9999px;
             margin-bottom: 2rem;
             letter-spacing: 0.5px;
             text-transform: uppercase;
+            backdrop-filter: blur(8px);
         }
 
         .audio-step-dots {
@@ -94,12 +98,12 @@
             width: 14px;
             height: 14px;
             border-radius: 50%;
-            background: #334155;
+            background: var(--border-color);
             transition: all 0.3s ease;
         }
 
-        .audio-step-dots span.active { background: #60a5fa; box-shadow: 0 0 10px #60a5fa; transform: scale(1.2); }
-        .audio-step-dots span.done { background: var(--accent-light); box-shadow: 0 0 10px var(--accent-light); }
+        .audio-step-dots span.active { background: var(--accent-color); box-shadow: 0 0 10px rgba(15, 118, 110, 0.4); transform: scale(1.2); }
+        .audio-step-dots span.done { background: var(--success); box-shadow: 0 0 10px rgba(16, 185, 129, 0.4); }
         
         #hiddenVideo {
             position: absolute;
