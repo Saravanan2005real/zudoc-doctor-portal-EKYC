@@ -7,31 +7,61 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000000; color: #f8fafc; font-family: 'Inter', sans-serif; }
-        .demo-container {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            z-index: 10;
-            background: rgba(15, 23, 42, 0.85);
-            padding: 40px;
-            border-radius: 16px;
-            border: 1px solid rgba(255,255,255,0.1);
-            backdrop-filter: blur(10px);
+        /* During calibration/challenge, we need a dark background for dot visibility */
+        body.tracking-mode {
+            background: #000000 !important;
+            background-image: none !important;
         }
+        body.tracking-mode .navbar { display: none; }
+
+        .demo-container {
+            max-width: 600px;
+            margin: 60px auto;
+            padding: 40px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            text-align: center;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 20px 40px -15px rgba(0,0,0,0.05);
+            position: relative;
+            z-index: 10;
+        }
+
+        .demo-container h2 {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+            margin-top: 0;
+            font-size: 1.8rem;
+            color: var(--text-color);
+        }
+
+        .demo-container p {
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
         .btn-start {
-            background: var(--accent-color, #2dd4bf);
-            color: #000;
+            background: var(--accent-color);
+            color: white;
             border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
+            padding: 14px 32px;
+            border-radius: 9999px;
             font-size: 1.1rem;
-            font-weight: 600;
+            font-weight: 700;
             cursor: pointer;
             margin-top: 20px;
+            transition: all 0.2s;
+            box-shadow: 0 4px 14px 0 rgba(15, 118, 110, 0.2);
         }
+
+        .btn-start:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(15, 118, 110, 0.3);
+        }
+
+        /* Hide webgazer video elements */
         #webgazerVideoContainer,
         #webgazerVideoFeed,
         #webgazerVideoCanvas,
@@ -50,6 +80,7 @@
             box-shadow: none !important;
             overflow: hidden !important;
         }
+
         .cal-dot {
             position: absolute;
             width: 40px;
@@ -73,6 +104,7 @@
             pointer-events: none;
             box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
         }
+
         .cal-hud {
             position: fixed;
             top: 20px;
@@ -82,18 +114,20 @@
             z-index: 999;
             background: rgba(0,0,0,0.7);
             padding: 10px 20px;
-            border-radius: 20px;
+            border-radius: 9999px;
             border: 1px solid rgba(255,255,255,0.1);
+            color: #f8fafc;
         }
+
         #gazeReticle {
             position: fixed;
             top: 0;
             left: 0;
             width: 24px;
             height: 24px;
-            border: 3px solid #2dd4bf;
+            border: 3px solid var(--accent-light);
             background: rgba(45, 212, 191, 0.35);
-            box-shadow: 0 0 15px #2dd4bf;
+            box-shadow: 0 0 15px var(--accent-light);
             border-radius: 50%;
             pointer-events: none;
             z-index: 10000;
@@ -107,23 +141,73 @@
             background: rgba(16, 185, 129, 0.5) !important;
             box-shadow: 0 0 20px #10b981 !important;
         }
+
         .hidden { display: none !important; }
+
+        /* Result card in light theme */
+        #challengeOverlay {
+            max-width: 600px;
+            margin: 60px auto;
+            padding: 40px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            text-align: center;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 20px 40px -15px rgba(0,0,0,0.05);
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+
+        body.tracking-mode #challengeOverlay {
+            background: rgba(15, 23, 42, 0.85);
+            border-color: rgba(255,255,255,0.1);
+            color: #f8fafc;
+        }
+
+        #verdict-title {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+        }
+
+        #loading-msg {
+            color: var(--accent-color);
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
+    <nav class="navbar">
+        <a href="index.html" class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-shield" style="color: var(--accent-color);">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                <path d="M9 12l2 2 4-4"></path>
+            </svg>
+            Verifyyy
+        </a>
+        <div class="nav-links">
+            <a href="index.html">Home</a>
+            <a href="index.html#services">Products & Services</a>
+        </div>
+    </nav>
+
     <div id="intro-card" class="demo-container">
-        <h2 style="margin-bottom: 16px;">Demo: Eye Tracking Liveness</h2>
-        <p style="color: #94a3b8; margin-bottom: 24px; max-width: 400px; line-height: 1.5;">
+        <div style="display:inline-block; border-radius:9999px; background-color: rgba(45, 212, 191, 0.1); border: 1px solid rgba(45, 212, 191, 0.2); color: var(--accent-color); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; padding: 6px 16px;">Eye Tracking Module</div>
+        <h2>Demo: Eye Tracking Liveness</h2>
+        <p style="margin-bottom: 24px; max-width: 400px; margin-left: auto; margin-right: auto;">
             Follow the dots on the screen with your eyes and hover over each dot to calibrate. Keep your head completely still during calibration.
         </p>
         <button class="btn-start" id="btn-start-demo">Start Calibration</button>
-        <p id="loading-msg" class="hidden" style="color: #f59e0b; margin-top: 20px; font-weight: bold;">Loading AI Models and requesting camera access... Please wait.</p>
+        <p id="loading-msg" class="hidden" style="margin-top: 20px;">Loading AI Models and requesting camera access... Please wait.</p>
     </div>
 
     <div id="calOverlay" class="hidden">
         <div class="cal-hud">
             <h3 style="margin:0 0 5px 0;">Look at each dot & Click</h3>
-            <div id="calProgress" style="color: #2dd4bf; font-weight: bold;">0 / 9 dots</div>
+            <div id="calProgress" style="color: var(--accent-light); font-weight: bold;">0 / 9 dots</div>
         </div>
         <div id="calLayer"></div>
     </div>
@@ -131,13 +215,13 @@
     <div id="challengeHud" class="cal-hud hidden">
         <h3 id="challengeStepTitle" style="margin:0 0 4px 0;">Follow the Target Dot (1 / 4)</h3>
         <div style="font-size: 0.95rem; color: #cbd5e1;">
-            Look inside the circular zone — Time: <span id="challengeTimer" style="color:#2dd4bf; font-weight:bold; font-size:1.1rem;">4.0s</span>
+            Look inside the circular zone — Time: <span id="challengeTimer" style="color:var(--accent-light); font-weight:bold; font-size:1.1rem;">4.0s</span>
         </div>
     </div>
     
-    <div id="challengeOverlay" class="demo-container hidden">
+    <div id="challengeOverlay" class="hidden">
         <h2 id="verdict-title">Verification Complete</h2>
-        <p id="verdict-text" style="color: #94a3b8; font-size: 1.1rem; margin-top: 10px;"></p>
+        <p id="verdict-text" style="color: var(--text-muted); font-size: 1.1rem; margin-top: 10px;"></p>
         <button class="btn-start" onclick="location.reload()" style="margin-top:20px;">Try Again</button>
     </div>
 

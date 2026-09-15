@@ -45,6 +45,7 @@ async function startDemo() {
         if (typeof webgazer.showFaceFeedbackBox === 'function') webgazer.showFaceFeedbackBox(false);
 
         document.getElementById('intro-card').classList.add('hidden');
+        document.body.classList.add('tracking-mode');
 
         // Ensure video container is sent completely offscreen and invisible
         const hideVidContainer = () => {
